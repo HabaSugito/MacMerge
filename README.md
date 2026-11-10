@@ -6,22 +6,64 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 
 > 🚧 開発中です / Work in progress
 
-## 予定している機能 / Planned features
+## できること / Features
 
-- [ ] ファイルの左右比較（差分の色分け表示）/ Side-by-side file comparison
-- [ ] 行内の差分表示 / Inline (character-level) differences
-- [ ] 差分の左右コピー・その場で編集・保存 / Copy changes left/right, edit and save
-- [ ] フォルダ比較 / Folder comparison
+**ファイル比較 / File compare**
+- 左右に並べて比較し、差分を色分け表示（片側にしかない行は灰色の空行でそろえる）
+- 行内の差分表示（単語単位。日本語は1文字ずつ区切る）
+- 差分の場所を示すロケーションペイン（クリックで移動）
+- 差分の左右コピー、その場で編集、元に戻す、保存
+- 文字コード（UTF-8 / UTF-16 / Shift_JIS / EUC-JP）と改行コード（LF / CRLF / CR）を自動判定し、保存時は元の形式のまま書き戻す
+
+**フォルダ比較 / Folder compare**
+- サブフォルダを含めて中身で比較し、ツリー表示
+- 「同一」「異なる」「左のみ」「右のみ」で表示を絞り込み
+- ダブルクリックでファイル比較を開く
+
+## 使い方 / Usage
+
+### キーボードショートカット
+
+WinMerge の Alt を Option（⌥）に置き換えています。
+
+| 操作 | ショートカット |
+| --- | --- |
+| 次の差分 / 前の差分 | ⌥↓ / ⌥↑ |
+| 最初の差分 / 最後の差分 | ⌥Home / ⌥End |
+| 右へコピー / 左へコピー | ⌥→ / ⌥← |
+| コピーして次の差分へ | ⌃⌥→ / ⌃⌥← |
+| 保存 | ⌘S |
+| 再読み込み | ⌘R |
+| 新しい比較 | ⌘N |
+
+### コマンドラインから開く
+
+```bash
+build/MacMerge.app/Contents/MacOS/MacMerge 左のパス 右のパス
+```
+
+`git difftool` で使う例:
+
+```bash
+git config --global difftool.macmerge.cmd '/Applications/MacMerge.app/Contents/MacOS/MacMerge "$LOCAL" "$REMOTE"'
+git difftool -t macmerge
+```
 
 ## ビルド / Build
 
 macOS 14 以降、Xcode 16 以降が必要です。
 
 ```bash
-swift build
-swift run MacMerge
-swift test
+./scripts/build-app.sh   # build/MacMerge.app を作る
+swift test               # 比較エンジンのテスト
 ```
+
+### 開発用の環境変数
+
+画面録画の権限なしで動作を確かめるための機能です。
+
+- `MACMERGE_SNAPSHOT=/path/prefix`：起動の数秒後に各ウィンドウを PNG で保存（`MACMERGE_SNAPSHOT_DELAY` で秒数を指定）
+- `MACMERGE_ACTIONS=next,copyRight,saveRight`：最初のファイル比較で操作を自動実行
 
 ## WinMerge との関係 / Relationship to WinMerge
 
