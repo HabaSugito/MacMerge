@@ -6,7 +6,7 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 
 > 🚧 開発中です / Work in progress
 
-**ダウンロード / Download:** [最新版 / Latest release](https://github.com/HabaSugito/MacMerge/releases/latest) · **Web:** [macmerge.pages.dev](https://macmerge.pages.dev)
+**ダウンロード / Download:** [最新版 / Latest release](https://github.com/HabaSugito/MacMerge/releases/latest) · **Web:** [macmerge.dev](https://macmerge.dev)
 
 画面は英語と日本語に対応しています。macOS の言語設定に合わせて切り替わり、設定画面（⌘,）でも選べます。
 

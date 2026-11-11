@@ -5,7 +5,7 @@ MacMerge は次の2か所で公開します。
 | もの | 置き場所 |
 | --- | --- |
 | アプリ（署名・公証済みの DMG） | GitHub Releases |
-| 紹介ページ（`site/`） | Cloudflare Pages |
+| 紹介ページ（`site/`） | Cloudflare Workers（静的サイト） |
 
 紹介ページの「ダウンロード」ボタンは
 `https://github.com/HabaSugito/MacMerge/releases/latest/download/MacMerge.dmg`
@@ -51,21 +51,17 @@ gh secret set SIGN_IDENTITY   # 例: Developer ID Application: Your Name (ABCDE1
 
 登録が終わったら、`.p12` と `.p8` は安全な場所に保管し、ほかには置かないでください。
 
-### 1-4. Cloudflare Pages に紹介ページをつなぐ
+### 1-4. Cloudflare に紹介ページをつなぐ
 
-1. Cloudflare のダッシュボード → **Workers & Pages → 作成 → Pages → Git に接続**
-2. `HabaSugito/MacMerge` を選ぶ
-3. 設定：
-   - プロジェクト名：`macmerge`（→ `https://macmerge.pages.dev`）
-   - 本番ブランチ：`main`
-   - フレームワーク：なし
-   - ビルドコマンド：（空欄）
-   - ビルド出力ディレクトリ：`site`
-4. 独自ドメインを使う場合は、プロジェクトの **カスタムドメイン** から追加する
+紹介ページは Cloudflare Workers の静的サイトとして公開しています。設定はリポジトリの `wrangler.jsonc` にあり、`site/` フォルダをそのまま公開します。
 
-以後は `main` に `site/` の変更をプッシュするたびに自動で公開されます。
+1. Cloudflare のダッシュボード → **Workers & Pages → 作成 → Git リポジトリをインポート**
+2. `HabaSugito/MacMerge` を選ぶ（プロジェクト名 `macmerge`、本番ブランチ `main`、デプロイコマンド `npx wrangler deploy` のまま）
+3. 以後は `main` へのプッシュのたびに自動で公開されます
 
-> プロジェクト名を `macmerge` 以外にした場合や独自ドメインを使う場合は、`site/index.html` と `site/ja/index.html` の `macmerge.pages.dev` を実際のアドレスに書き換えてください（SNS で共有されたときのプレビュー画像に使われます）。
+公開アドレス：https://macmerge.dev （`www.macmerge.dev` も同じページ）
+
+ドメイン `macmerge.dev` は Cloudflare で登録していて、`wrangler.jsonc` の `routes` でこの Worker につないでいます。ドメインを変えるときは、`wrangler.jsonc`、`site/index.html`、`site/ja/index.html`、README のアドレスを書き換えてください。
 
 ---
 

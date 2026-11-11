@@ -1,0 +1,17 @@
+// Cloudflare Workers settings for the website in site/.
+// Cloudflare builds this repository on every push to main and runs `npx wrangler deploy`.
+{
+  "name": "macmerge",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./site",
+    "not_found_handling": "404-page"
+  },
+  // The site is served only at its own domain, not at a workers.dev address.
+  "routes": [
+    { "pattern": "macmerge.dev", "custom_domain": true },
+    { "pattern": "www.macmerge.dev", "custom_domain": true }
+  ],
+  "workers_dev": false,
+  "preview_urls": false
+}
