@@ -68,9 +68,13 @@ final class HiddenLines: NSObject, NSLayoutManagerDelegate {
         guard isActive, glyphRange.length > 0 else { return false }
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphRange.location)
         guard isHidden(char: charIndex) else { return false }
-        // Drop the text row but keep the paragraph spacing below it (the filler rows).
+        // Drop the text but keep the paragraph spacing below the line (the filler rows).
+        // A wrapped line has several fragments; only the last one carries the spacing.
+        let l = line(of: charIndex)
+        let lineEnd = l + 1 < lineStarts.count ? lineStarts[l + 1] : (layoutManager.textStorage?.length ?? 0)
+        let fragmentEnd = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil).upperBound
         let style = layoutManager.textStorage?.attribute(.paragraphStyle, at: charIndex, effectiveRange: nil) as? NSParagraphStyle
-        lineFragmentRect.pointee.size.height = style?.paragraphSpacing ?? 0
+        lineFragmentRect.pointee.size.height = fragmentEnd >= lineEnd ? (style?.paragraphSpacing ?? 0) : 0
         lineFragmentUsedRect.pointee.size.height = 0
         return true
     }

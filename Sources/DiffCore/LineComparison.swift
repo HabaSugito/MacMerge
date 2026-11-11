@@ -101,12 +101,56 @@ func blocks(deleted: [Bool], inserted: [Bool]) -> [DiffBlock] {
 
 /// The full result of comparing two texts line by line, ready for side-by-side display.
 public struct LineComparison {
-    public let blocks: [DiffBlock]
-    public let hunks: [DiffHunk]
-    public let rows: [AlignedRow]
+    public private(set) var blocks: [DiffBlock]
+    public private(set) var hunks: [DiffHunk]
+    public private(set) var rows: [AlignedRow]
     /// Lines that were moved rather than changed, mapped to their partner on the other side.
     public private(set) var movedLeft: [Int: Int] = [:]
     public private(set) var movedRight: [Int: Int] = [:]
+
+    /// Compares with synchronization points: each `(left, right)` pair of line numbers is
+    /// forced onto the same row, and the text between points is compared piece by piece.
+    public init(left: [String], right: [String], options: CompareOptions = .standard, syncPoints: [(left: Int, right: Int)]) {
+        let points = syncPoints
+            .filter { $0.left > 0 && $0.right > 0 && $0.left < left.count && $0.right < right.count }
+            .sorted { $0.left < $1.left }
+        var valid: [(Int, Int)] = []
+        for p in points where valid.last.map({ p.left > $0.0 && p.right > $0.1 }) ?? true { valid.append((p.left, p.right)) }
+        guard !valid.isEmpty else {
+            self.init(left: left, right: right, options: options)
+            return
+        }
+        var noMoves = options
+        noMoves.detectMovedBlocks = false
+        var blocks: [DiffBlock] = [], hunks: [DiffHunk] = [], rows: [AlignedRow] = []
+        let bounds = [(0, 0)] + valid + [(left.count, right.count)]
+        for k in 0..<(bounds.count - 1) {
+            let (l0, r0) = bounds[k], (l1, r1) = bounds[k + 1]
+            let part = LineComparison(left: Array(left[l0..<l1]), right: Array(right[r0..<r1]), options: noMoves)
+            let rowBase = rows.count, hunkBase = hunks.count
+            for block in part.blocks {
+                switch block {
+                case let .equal(l, r): blocks.append(.equal(left: (l.lowerBound + l0)..<(l.upperBound + l0), right: (r.lowerBound + r0)..<(r.upperBound + r0)))
+                case let .changed(l, r): blocks.append(.changed(left: (l.lowerBound + l0)..<(l.upperBound + l0), right: (r.lowerBound + r0)..<(r.upperBound + r0)))
+                }
+            }
+            for h in part.hunks {
+                hunks.append(DiffHunk(left: (h.left.lowerBound + l0)..<(h.left.upperBound + l0),
+                                      right: (h.right.lowerBound + r0)..<(h.right.upperBound + r0),
+                                      rows: (h.rows.lowerBound + rowBase)..<(h.rows.upperBound + rowBase)))
+            }
+            for row in part.rows {
+                rows.append(AlignedRow(left: row.left.map { $0 + l0 }, right: row.right.map { $0 + r0 },
+                                       hunk: row.hunk.map { $0 + hunkBase }, isIgnored: row.isIgnored))
+            }
+        }
+        var combined = LineComparison(left: [], right: [])
+        combined.blocks = blocks
+        combined.hunks = hunks
+        combined.rows = rows
+        if options.detectMovedBlocks { combined.detectMoves(left: left, right: right, options: options) }
+        self = combined
+    }
 
     public init(left: [String], right: [String], options: CompareOptions = .standard) {
         if options.changesLineKeys {

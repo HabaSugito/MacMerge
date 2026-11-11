@@ -19,13 +19,13 @@ enum Exporter {
     }
 
     static func saveReport(_ html: String) {
-        save(html, suggestedName: "MacMerge レポート.html", type: .html, openAfterSaving: true)
+        save(html, suggestedName: L("MacMerge Report.html"), type: .html, openAfterSaving: true)
     }
 
     static func savePatch(_ patch: String) {
         guard !patch.isEmpty else {
             let alert = NSAlert()
-            alert.messageText = "差分がないため、パッチは作成されませんでした"
+            alert.messageText = L("No patch was created because there are no differences")
             alert.runModal()
             return
         }

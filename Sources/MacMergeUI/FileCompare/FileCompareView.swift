@@ -12,7 +12,7 @@ struct FileCompareView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let error = controller.loadError {
-                ContentUnavailableView("ファイルを開けませんでした", systemImage: "exclamationmark.triangle", description: Text(error))
+                ContentUnavailableView("The Files Could Not Be Opened", systemImage: "exclamationmark.triangle", description: Text(error))
             } else if controller.isBinary {
                 binaryNotice
             } else {
@@ -31,6 +31,7 @@ struct FileCompareView: View {
         .navigationTitle(controller.target.title)
         .toolbar { toolbar }
         .focusedSceneValue(\.fileCompare, controller)
+        .onAppear { RecentComparisons.shared.add(controller.target) }
     }
 
     private func paneColumn(_ index: Int) -> some View {
@@ -45,46 +46,46 @@ struct FileCompareView: View {
     private func role(_ index: Int) -> String? {
         guard controller.isThreeWay else { return nil }
         switch index {
-        case 0: return "左"
-        case 1: return controller.target.kind == .conflict ? "結果" : "ベース"
-        default: return "右"
+        case 0: return L("Left")
+        case 1: return controller.target.kind == .conflict ? L("Merge Result") : L("Base")
+        default: return L("Right")
         }
     }
 
     private var binaryNotice: some View {
         ContentUnavailableView {
-            Label("バイナリファイル", systemImage: "doc.zipper")
+            Label("Binary Files", systemImage: "doc.zipper")
         } description: {
-            Text(controller.binaryFilesIdentical ? "ファイルは同一です。" : "ファイルは異なります。テキストとしては比較できません。")
+            Text(controller.binaryFilesIdentical ? "The files are identical." : "The files are different. They cannot be compared as text.")
         }
     }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup {
-            Button { controller.previousDifference() } label: { Label("前の差分", systemImage: "chevron.up") }
-                .help("前の差分 (⌥↑)")
-            Button { controller.nextDifference() } label: { Label("次の差分", systemImage: "chevron.down") }
-                .help("次の差分 (⌥↓)")
+            Button { controller.previousDifference() } label: { Label("Previous Difference", systemImage: "chevron.up") }
+                .help("Previous difference (⌥↑)")
+            Button { controller.nextDifference() } label: { Label("Next Difference", systemImage: "chevron.down") }
+                .help("Next difference (⌥↓)")
         }
         if controller.isThreeWay {
             ToolbarItemGroup {
-                Button { controller.copyRightward() } label: { Label("左から取り込む", systemImage: "arrow.right.square") }
-                    .help("左の変更を中央へ取り込む (⌥→)")
+                Button { controller.copyRightward() } label: { Label("Take Left", systemImage: "arrow.right.square") }
+                    .help("Take the left change into the middle (⌥→)")
                     .disabled(controller.currentHunk == nil)
-                Button { controller.copyLeftward() } label: { Label("右から取り込む", systemImage: "arrow.left.square") }
-                    .help("右の変更を中央へ取り込む (⌥←)")
+                Button { controller.copyLeftward() } label: { Label("Take Right", systemImage: "arrow.left.square") }
+                    .help("Take the right change into the middle (⌥←)")
                     .disabled(controller.currentHunk == nil)
-                Button { controller.autoMerge() } label: { Label("自動マージ", systemImage: "wand.and.stars") }
-                    .help("片側だけの変更をすべて中央へ取り込む (⌃⌥M)")
+                Button { controller.autoMerge() } label: { Label("Auto Merge", systemImage: "wand.and.stars") }
+                    .help("Take every one-sided change into the middle (⌃⌥M)")
             }
         } else {
             ToolbarItemGroup {
-                Button { controller.copyLeftward() } label: { Label("左へコピー", systemImage: "arrow.left.square") }
-                    .help("右の差分を左へコピー (⌥←)")
+                Button { controller.copyLeftward() } label: { Label("Copy to Left", systemImage: "arrow.left.square") }
+                    .help("Copy the right difference to the left (⌥←)")
                     .disabled(controller.currentHunk == nil)
-                Button { controller.copyRightward() } label: { Label("右へコピー", systemImage: "arrow.right.square") }
-                    .help("左の差分を右へコピー (⌥→)")
+                Button { controller.copyRightward() } label: { Label("Copy to Right", systemImage: "arrow.right.square") }
+                    .help("Copy the left difference to the right (⌥→)")
                     .disabled(controller.currentHunk == nil)
             }
         }
@@ -93,21 +94,21 @@ struct FileCompareView: View {
         }
         ToolbarItem {
             Menu {
-                Button("HTML レポートを作成…") { Exporter.saveReport(controller.makeReport()) }
+                Button("Create HTML Report…") { Exporter.saveReport(controller.makeReport()) }
                 if !controller.isThreeWay {
-                    Button("パッチを作成…") { Exporter.savePatch(controller.makePatch()) }
+                    Button("Create Patch…") { Exporter.savePatch(controller.makePatch()) }
                 }
             } label: {
-                Label("書き出し", systemImage: "square.and.arrow.up")
+                Label("Export", systemImage: "square.and.arrow.up")
             }
-            .help("レポートやパッチを書き出す")
+            .help("Export a report or a patch")
         }
         ToolbarItemGroup {
-            Button { controller.saveAll() } label: { Label("保存", systemImage: "square.and.arrow.down") }
-                .help("保存 (⌘S)")
+            Button { controller.saveAll() } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                .help("Save (⌘S)")
                 .disabled(!controller.isDirty)
-            Button { controller.reload() } label: { Label("再読み込み", systemImage: "arrow.clockwise") }
-                .help("ファイルを読み直して再比較 (⌘R)")
+            Button { controller.reload() } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                .help("Reload the files and compare again (⌘R)")
         }
     }
 }
@@ -136,14 +137,17 @@ private struct PathHeader: View {
                 Text(role).fontWeight(.semibold).foregroundStyle(.secondary)
             }
             if info.isDirty {
-                Circle().fill(.orange).frame(width: 7, height: 7).help("保存していない変更があります")
+                Circle().fill(.orange).frame(width: 7, height: 7).help("There are unsaved changes")
+            }
+            if info.isReadOnly {
+                Image(systemName: "lock.fill").foregroundStyle(.secondary).help("Read Only")
             }
             Text(info.title)
                 .lineLimit(1)
                 .truncationMode(.head)
                 .textSelection(.enabled)
             if !info.file.exists, info.url != nil {
-                Text("（ファイルなし）").foregroundStyle(.secondary)
+                Text("(no file)").foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -192,7 +196,7 @@ private struct LocationPane: View {
             })
         }
         .background(Color(nsColor: DiffColors.gutter))
-        .help("差分の位置。クリックでその場所へ移動")
+        .help("Where the differences are. Click to go there.")
     }
 }
 
@@ -202,6 +206,10 @@ private struct StatusBar: View {
     var body: some View {
         HStack(spacing: 16) {
             Text(summary)
+            if controller.mergeMode {
+                Text("Merge Mode").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                    .help("Arrow keys move between differences (↑↓) and copy them (←→). Press F9 to turn off.")
+            }
             if let message = controller.statusMessage {
                 Text(message).lineLimit(1)
             }
@@ -216,14 +224,14 @@ private struct StatusBar: View {
         .padding(.vertical, 4)
     }
 
-    private var labels: [String] { controller.isThreeWay ? ["左", "中", "右"] : ["左", "右"] }
+    private var labels: [String] { controller.isThreeWay ? [L("Left"), L("Middle"), L("Right")] : [L("Left"), L("Right")] }
 
     private var summary: String {
         let count = controller.hunks.count
-        if count == 0 { return controller.isBinary ? "" : "差分はありません" }
-        let conflicts = controller.isThreeWay ? "（コンフリクト \(controller.conflictCount)）" : ""
-        if let c = controller.currentHunk { return "差分 \(c + 1) / \(count)" + conflicts }
-        return "差分 \(count) 個" + conflicts
+        if count == 0 { return controller.isBinary ? "" : L("No differences") }
+        let conflicts = controller.isThreeWay ? L(" (\(controller.conflictCount) conflicts)") : ""
+        if let c = controller.currentHunk { return L("Difference \(c + 1) of \(count)") + conflicts }
+        return L("\(count) differences") + conflicts
     }
 
     private func fileInfo(_ info: PaneInfo, label: String) -> some View {

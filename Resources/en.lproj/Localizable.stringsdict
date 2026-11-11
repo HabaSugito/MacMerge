@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key> (%lld conflicts)</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string> (%lld conflict)</string>
+      <key>other</key><string> (%lld conflicts)</string>
+    </dict>
+  </dict>
+  <key>%lld differences</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>%lld difference</string>
+      <key>other</key><string>%lld differences</string>
+    </dict>
+  </dict>
+  <key>%lld conflicts are still unresolved</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>%lld conflict is still unresolved</string>
+      <key>other</key><string>%lld conflicts are still unresolved</string>
+    </dict>
+  </dict>
+  <key>Merged %lld differences automatically.</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Merged %lld difference automatically.</string>
+      <key>other</key><string>Merged %lld differences automatically.</string>
+    </dict>
+  </dict>
+  <key>Copy %lld items to the right?</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Copy %lld item to the right?</string>
+      <key>other</key><string>Copy %lld items to the right?</string>
+    </dict>
+  </dict>
+  <key>Copy %lld items to the left?</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Copy %lld item to the left?</string>
+      <key>other</key><string>Copy %lld items to the left?</string>
+    </dict>
+  </dict>
+  <key>Move %lld items to the Trash?</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Move %lld item to the Trash?</string>
+      <key>other</key><string>Move %lld items to the Trash?</string>
+    </dict>
+  </dict>
+  <key>and %lld more</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>and %lld more</string>
+      <key>other</key><string>and %lld more</string>
+    </dict>
+  </dict>
+  <key>Comparing… %lld files</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Comparing… %lld file</string>
+      <key>other</key><string>Comparing… %lld files</string>
+    </dict>
+  </dict>
+  <key>Loaded %lld conflict markers. The middle pane is the result that gets saved.</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>Loaded %lld conflict marker. The middle pane is the result that gets saved.</string>
+      <key>other</key><string>Loaded %lld conflict markers. The middle pane is the result that gets saved.</string>
+    </dict>
+  </dict>
+  <key>%lld Lines</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>%lld Line</string>
+      <key>other</key><string>%lld Lines</string>
+    </dict>
+  </dict>
+  <key>Merged %lld differences automatically. %lld conflicts remain.</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@a@ %#@b@</string>
+    <key>a</key><dict><key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string><key>NSStringFormatValueTypeKey</key><string>lld</string><key>one</key><string>Merged %lld difference automatically.</string><key>other</key><string>Merged %lld differences automatically.</string></dict>
+    <key>b</key><dict><key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string><key>NSStringFormatValueTypeKey</key><string>lld</string><key>one</key><string>%lld conflict remains.</string><key>other</key><string>%lld conflicts remain.</string></dict>
+  </dict>
+</dict>
+</plist>

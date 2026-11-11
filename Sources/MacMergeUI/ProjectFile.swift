@@ -69,7 +69,7 @@ struct ProjectFile: Codable {
     static func open() -> CompareTarget? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
-        panel.message = "MacMerge のプロジェクトファイル（.macmerge）を選んでください"
+        panel.message = L("Choose a MacMerge project file (.macmerge)")
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return load(url)
     }
@@ -82,7 +82,7 @@ struct ProjectFile: Codable {
             return project.target
         } catch {
             let alert = NSAlert()
-            alert.messageText = "プロジェクトファイルを読み込めませんでした"
+            alert.messageText = L("The project file could not be read")
             alert.informativeText = error.localizedDescription
             alert.runModal()
             return nil

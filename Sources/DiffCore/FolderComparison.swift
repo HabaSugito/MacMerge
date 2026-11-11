@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum CompareResult: Equatable {
@@ -8,6 +9,9 @@ public enum CompareResult: Equatable {
     case binaryIdentical
     case binaryDifferent
     case error(String)
+    /// A file that exists on one side only, but with the same contents as a file at
+    /// `counterpart` (a path relative to the other root): it was renamed or moved.
+    case moved(counterpart: String)
 
     public var isDifferent: Bool {
         switch self {
@@ -44,16 +48,69 @@ public struct FolderComparer {
     public var diffCountLimit = 4 * 1024 * 1024
     public var options: CompareOptions
     public var filter: FileFilter
+    /// Pair up files that exist on one side only but have identical contents.
+    public var detectRenames: Bool
 
-    public init(options: CompareOptions = .standard, filter: FileFilter = .all) {
+    public init(options: CompareOptions = .standard, filter: FileFilter = .all, detectRenames: Bool = false) {
         self.options = options
         self.filter = filter
+        self.detectRenames = detectRenames
     }
 
     /// Compares two folders recursively. `progress` is called with the number of files compared so far.
     public func compare(left: URL, right: URL, progress: ((Int) -> Void)? = nil, isCancelled: () -> Bool = { false }) -> [FolderItem] {
         var count = 0
-        return compareFolder(left: left, right: right, relative: "", count: &count, progress: progress, isCancelled: isCancelled)
+        var items = compareFolder(left: left, right: right, relative: "", count: &count, progress: progress, isCancelled: isCancelled)
+        if detectRenames { Self.markRenames(&items, left: left, right: right) }
+        return items
+    }
+
+    /// Marks one-sided files whose contents match exactly one file on the other side.
+    static func markRenames(_ items: inout [FolderItem], left: URL, right: URL) {
+        var leftOnly: [String: FileStat] = [:], rightOnly: [String: FileStat] = [:]
+        func collect(_ list: [FolderItem], _ side: CompareResult?) {
+            for item in list {
+                let s = item.result == .leftOnly || item.result == .rightOnly ? item.result : side
+                if let children = item.children { collect(children, s); continue }
+                let path = item.id.replacingOccurrences(of: "\u{0}r", with: "")
+                if s == .leftOnly, let stat = item.left { leftOnly[path] = stat }
+                if s == .rightOnly, let stat = item.right { rightOnly[path] = stat }
+            }
+        }
+        collect(items, nil)
+        guard !leftOnly.isEmpty, !rightOnly.isEmpty else { return }
+
+        func hash(_ url: URL) -> String? {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        let rightSizes = Set(rightOnly.values.map(\.size))
+        var leftByHash: [String: [String]] = [:], rightByHash: [String: [String]] = [:]
+        for (path, stat) in leftOnly where stat.size > 0 && rightSizes.contains(stat.size) {
+            if let h = hash(left.appending(path: path)) { leftByHash[h, default: []].append(path) }
+        }
+        let leftSizes = Set(leftOnly.values.map(\.size))
+        for (path, stat) in rightOnly where stat.size > 0 && leftSizes.contains(stat.size) {
+            if let h = hash(right.appending(path: path)) { rightByHash[h, default: []].append(path) }
+        }
+        var pairs: [String: String] = [:], reverse: [String: String] = [:]
+        for (h, lefts) in leftByHash where lefts.count == 1 {
+            guard let rights = rightByHash[h], rights.count == 1 else { continue }
+            pairs[lefts[0]] = rights[0]
+            reverse[rights[0]] = lefts[0]
+        }
+        func apply(_ list: inout [FolderItem]) {
+            for i in list.indices {
+                if list[i].children != nil {
+                    apply(&list[i].children!)
+                    continue
+                }
+                let path = list[i].id.replacingOccurrences(of: "\u{0}r", with: "")
+                if list[i].left != nil, list[i].right == nil, let other = pairs[path] { list[i].result = .moved(counterpart: other) }
+                if list[i].right != nil, list[i].left == nil, let other = reverse[path] { list[i].result = .moved(counterpart: other) }
+            }
+        }
+        apply(&items)
     }
 
     private struct Entry {

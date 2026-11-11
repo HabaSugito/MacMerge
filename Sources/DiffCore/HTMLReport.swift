@@ -2,6 +2,15 @@ import Foundation
 
 /// Self-contained HTML reports of comparisons.
 public enum HTMLReport {
+    private static func L(_ value: String.LocalizationValue) -> String { String(localized: value) }
+
+    /// The language the report is written in, for the page's lang attribute.
+    private static var language: String { Bundle.main.preferredLocalizations.first ?? "en" }
+
+    private static func head() -> String {
+        "<!doctype html><html lang=\"\(language)\"><head><meta charset=\"utf-8\"><title>\(escape(L("MacMerge Report")))</title><style>\(style)</style></head><body>"
+    }
+
     public static func escape(_ s: String) -> String {
         var out = ""
         out.reserveCapacity(s.count)
@@ -34,8 +43,8 @@ public enum HTMLReport {
     /// A side-by-side report of one file comparison.
     public static func fileComparison(leftTitle: String, rightTitle: String, left: [String], right: [String],
                                       comparison: LineComparison, options: CompareOptions = .standard) -> String {
-        var html = "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>MacMerge レポート</title><style>\(style)</style></head><body>"
-        html += "<h1>ファイル比較レポート</h1><p class=\"meta\">差分 \(comparison.hunks.count) 箇所 · \(escape(Date().formatted()))</p>"
+        var html = head()
+        html += "<h1>\(escape(L("File Comparison Report")))</h1><p class=\"meta\">\(escape(L("\(comparison.hunks.count) differences"))) · \(escape(Date().formatted()))</p>"
         html += "<table><tr><th colspan=2>\(escape(leftTitle))</th><th colspan=2>\(escape(rightTitle))</th></tr>"
         for row in comparison.rows {
             let cls: String
@@ -71,14 +80,15 @@ public enum HTMLReport {
 
     /// A table of every item in a folder comparison.
     public static func folderComparison(left: URL, right: URL, items: [FolderItem]) -> String {
-        var html = "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><title>MacMerge レポート</title><style>\(style)</style></head><body>"
-        html += "<h1>フォルダ比較レポート</h1><p class=\"meta\">左: \(escape(left.path))<br>右: \(escape(right.path))<br>\(escape(Date().formatted()))</p>"
-        html += "<table><tr><th>パス</th><th>比較結果</th><th>左の更新日時</th><th>右の更新日時</th><th>左のサイズ</th><th>右のサイズ</th></tr>"
+        var html = head()
+        html += "<h1>\(escape(L("Folder Comparison Report")))</h1><p class=\"meta\">\(escape(L("Left"))): \(escape(left.path))<br>\(escape(L("Right"))): \(escape(right.path))<br>\(escape(Date().formatted()))</p>"
+        let headers = [L("Path"), L("Result"), L("Left Modified"), L("Right Modified"), L("Left Size"), L("Right Size")]
+        html += "<table><tr>" + headers.map { "<th>\(escape($0))</th>" }.joined() + "</tr>"
         func walk(_ list: [FolderItem], _ prefix: String) {
             for item in list {
                 let path = prefix + item.name + (item.isDirectory ? "/" : "")
                 let (text, cls) = describe(item.result)
-                html += "<tr><td>\(escape(path))</td><td class=\"\(cls)\">\(text)</td>"
+                html += "<tr><td>\(escape(path))</td><td class=\"\(cls)\">\(escape(text))</td>"
                 html += "<td>\(item.left?.modified?.formatted() ?? "")</td><td>\(item.right?.modified?.formatted() ?? "")</td>"
                 html += "<td>\(item.isDirectory ? "" : item.left.map { "\($0.size)" } ?? "")</td><td>\(item.isDirectory ? "" : item.right.map { "\($0.size)" } ?? "")</td></tr>"
                 if let children = item.children { walk(children, path) }
@@ -90,15 +100,16 @@ public enum HTMLReport {
 
     public static func describe(_ result: CompareResult) -> (text: String, cssClass: String) {
         switch result {
-        case .identical: return ("同一", "identical")
-        case .different(0): return ("異なる（改行・文字コードのみ）", "different")
-        case .different(let n?): return ("異なる（\(n) 箇所）", "different")
-        case .different: return ("異なる", "different")
-        case .leftOnly: return ("左のみ", "only")
-        case .rightOnly: return ("右のみ", "only")
-        case .binaryIdentical: return ("バイナリ：同一", "identical")
-        case .binaryDifferent: return ("バイナリ：異なる", "different")
-        case .error(let m): return ("エラー：" + escape(m), "error")
+        case .identical: return (L("Identical"), "identical")
+        case .different(0): return (L("Different (line endings or encoding only)"), "different")
+        case .different(let n?): return (L("Different (\(n))"), "different")
+        case .different: return (L("Different"), "different")
+        case .leftOnly: return (L("Left only"), "only")
+        case .rightOnly: return (L("Right only"), "only")
+        case .binaryIdentical: return (L("Binary: identical"), "identical")
+        case .binaryDifferent: return (L("Binary: different"), "different")
+        case .error(let m): return (L("Error: \(m)"), "error")
+        case .moved(let other): return (L("Renamed or moved: \(other)"), "different")
         }
     }
 }

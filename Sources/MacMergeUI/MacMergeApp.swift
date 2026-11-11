@@ -4,9 +4,8 @@ import SwiftUI
 /// Program entry. AppKit opens no window at all when launched with plain arguments,
 /// so `MacMerge left right` restarts itself as `MacMerge -MacMergeLeft left -MacMergeRight right`,
 /// which AppKit reads as settings instead.
-@main
-enum Launcher {
-    static func main() {
+public enum Launcher {
+    public static func main() {
         LaunchArguments.relaunchWithOptionsIfNeeded()
         MacMergeApp.main()
     }
@@ -70,7 +69,7 @@ struct MacMergeApp: App {
         }
         .windowResizability(.contentSize)
 
-        WindowGroup("比較", for: CompareTarget.self) { $target in
+        WindowGroup("Compare", for: CompareTarget.self) { $target in
             if let target {
                 Group {
                     if target.isFolder {
@@ -106,7 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Needed when started with `swift run` instead of from the .app bundle.
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        // Automated snapshot runs must not take the keyboard away from whatever the user is doing.
+        if ProcessInfo.processInfo.environment["MACMERGE_SNAPSHOT"] == nil {
+            NSApp.activate(ignoringOtherApps: true)
+        }
+        ClipboardHistory.shared.start()
         scheduleSnapshotIfRequested()
     }
 

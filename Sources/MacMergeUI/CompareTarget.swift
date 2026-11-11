@@ -37,7 +37,7 @@ struct CompareTarget: Codable, Hashable {
     var isThreeWay: Bool { middle != nil }
 
     var title: String {
-        if kind == .conflict { return "\(left.lastPathComponent)（コンフリクト）" }
+        if kind == .conflict { return L("\(left.lastPathComponent) (Conflict)") }
         if let middle { return "\(left.lastPathComponent) ↔ \(middle.lastPathComponent) ↔ \(right.lastPathComponent)" }
         return left.lastPathComponent == right.lastPathComponent
             ? left.lastPathComponent

@@ -374,3 +374,42 @@ final class ThreeWayTests: XCTestCase {
         XCTAssertNil(ConflictFile(text: "no markers\n"))
     }
 }
+
+final class SyncPointTests: XCTestCase {
+    func testSyncPointForcesAlignment() {
+        // Without a sync point "b" lines up with "b". With (2, 1), left line 2 ("c") is put
+        // on the same row as right line 1 ("b").
+        let left = ["a", "b", "c", "d"], right = ["a", "b", "d"]
+        let plain = LineComparison(left: left, right: right)
+        XCTAssertEqual(plain.rows.map(\.right), [0, 1, nil, 2])
+        let synced = LineComparison(left: left, right: right, syncPoints: [(left: 2, right: 1)])
+        XCTAssertEqual(synced.rows.map(\.left), [0, 1, 2, 3])
+        XCTAssertEqual(synced.rows.map(\.right), [0, nil, 1, 2])
+        XCTAssertEqual(synced.hunks.count, 2)
+    }
+
+    func testInvalidSyncPointsAreIgnored() {
+        let c = LineComparison(left: ["a"], right: ["b"], syncPoints: [(left: 5, right: 0)])
+        XCTAssertEqual(c.hunks.count, 1)
+    }
+}
+
+final class RenameDetectionTests: XCTestCase {
+    func testRenamedFileIsPaired() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let l = root.appendingPathComponent("L"), r = root.appendingPathComponent("R")
+        try fm.createDirectory(at: l, withIntermediateDirectories: true)
+        try fm.createDirectory(at: r.appendingPathComponent("docs"), withIntermediateDirectories: true)
+        try "same contents\n".write(to: l.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        try "same contents\n".write(to: r.appendingPathComponent("docs/new.txt"), atomically: true, encoding: .utf8)
+        try "only left\n".write(to: l.appendingPathComponent("gone.txt"), atomically: true, encoding: .utf8)
+
+        let items = FolderComparer(detectRenames: true).compare(left: l, right: r)
+        let byName = Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0) })
+        XCTAssertEqual(byName["old.txt"]?.result, .moved(counterpart: "docs/new.txt"))
+        XCTAssertEqual(byName["docs"]?.children?.first?.result, .moved(counterpart: "old.txt"))
+        XCTAssertEqual(byName["gone.txt"]?.result, .leftOnly)
+    }
+}

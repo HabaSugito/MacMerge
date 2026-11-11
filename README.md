@@ -6,6 +6,10 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 
 > 🚧 開発中です / Work in progress
 
+画面は英語と日本語に対応しています。macOS の言語設定に合わせて切り替わり、設定画面（⌘,）でも選べます。
+
+The app is available in English and Japanese. It follows the macOS language, and you can choose the language in Settings (⌘,).
+
 ## できること / Features
 
 **ファイル比較 / File compare**
@@ -17,7 +21,13 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 - 差分ブロックの中では、似ている行同士を同じ高さにそろえる
 - 差分の前後だけ表示（0〜9行。⌘D で「すべての行」と切り替え）
 - 移動した行の検出（オレンジで表示）
-- HTML レポートとパッチ（unified 形式）の書き出し
+- HTML レポートとパッチ（unified 形式）の書き出し、印刷
+- 行の折り返し、構文の色分け、フォント・タブ幅・差分の色の変更
+- 指定行へ移動、ブックマーク、同期ポイント（左右の行の対応を手で指定）
+- マージモード（F9：矢印キーだけで差分を移動・コピー）
+- 左右の入れ替え、読み取り専用、改行コード・文字コードを変えて保存、文字コードを指定して開き直す
+- ほかのアプリでファイルが変更されたら自動で読み直す
+- 既定のアプリ・指定したアプリで開く
 
 **3者比較とマージ / 3-way compare and merge**
 - 左・ベース（中央）・右の3ペインで比較。片側だけの変更は青、両側が別々に変えたコンフリクトは黄色
@@ -32,6 +42,14 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 - 選択した項目を左右へコピー、ゴミ箱に入れる
 - ファイルフィルタ（例: `*.swift;*.txt;!*.o;!build/`。`!` で除外、末尾 `/` でフォルダ）
 - フォルダ全体のパッチと HTML レポートの書き出し
+- ツリー表示とフラット表示の切り替え、表示する列の選択（列見出しを右クリック）
+- 名前変更・移動したファイルの検出
+- フォルダ内の変更を自動で検知して再比較
+- 選択した項目を Zip にまとめる、既定のアプリで開く
+
+**その他 / Other**
+- 最近使った比較の一覧
+- クリップボードの履歴（起動中に最後にコピーした2つ）の比較
 
 **プロジェクトファイル / Project files**
 - 比較するパス・フィルタ・比較オプションを `.macmerge` ファイルに保存し、あとで開き直せる（⌘O）
@@ -57,6 +75,12 @@ WinMerge の Alt を Option（⌥）に置き換えています。
 | 次のコンフリクト / 前のコンフリクト（3者比較） | ⌥⇧↓ / ⌥⇧↑ |
 | 自動マージ（3者比較） | ⌃⌥M |
 | すべての行 ⇄ 差分の前後だけ | ⌘D |
+| 指定行へ移動 | ⌘L |
+| ブックマークの設定/解除・次・前 | ⌘F2 / F2 / ⇧F2 |
+| マージモード | F9 |
+| 同期ポイントを追加 | ⌃⌥S |
+| 既定のアプリで開く | ⌘⌥E |
+| プリント | ⌘P |
 | 選択項目をゴミ箱へ（フォルダ比較） | ⌘⌫ |
 | 保存 | ⌘S |
 | 再読み込み | ⌘R |
@@ -91,8 +115,14 @@ macOS 14 以降、Xcode 16 以降が必要です。
 
 ```bash
 ./scripts/build-app.sh   # build/MacMerge.app を作る
-swift test               # 比較エンジンのテスト
+swift test               # 比較エンジンと画面まわりのテスト
 ```
+
+### 翻訳 / Translations
+
+コードの中の文言は英語です。日本語訳は `Resources/ja.lproj/Localizable.strings` にあり、`scripts/add-ja.py 'English=日本語'` で追加できます。訳が抜けているとテスト（`TranslationTests`）が失敗します。
+
+UI strings in the code are English. The Japanese translation lives in `Resources/ja.lproj/Localizable.strings`; add entries with `scripts/add-ja.py 'English=日本語'`. A missing translation makes `TranslationTests` fail.
 
 ### 開発用の環境変数
 

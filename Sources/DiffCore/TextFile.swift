@@ -44,6 +44,31 @@ public struct TextFile: Equatable {
         return decode(try Data(contentsOf: url))
     }
 
+    /// Decodes with a given encoding instead of detecting it (for "Reopen with Encoding").
+    /// Returns nil when the data is not valid in that encoding.
+    public static func decode(_ data: Data, as encoding: String.Encoding) -> TextFile? {
+        var file = TextFile.empty
+        file.exists = true
+        file.encoding = encoding
+        var body = data
+        let boms: [(String.Encoding, [UInt8])] = [(.utf8, [0xEF, 0xBB, 0xBF]), (.utf16LittleEndian, [0xFF, 0xFE]), (.utf16BigEndian, [0xFE, 0xFF])]
+        if let bom = boms.first(where: { $0.0 == encoding && data.starts(with: $0.1) }) {
+            file.hasBOM = true
+            body = data.dropFirst(bom.1.count)
+        }
+        guard let raw = String(data: body, encoding: encoding) else { return nil }
+        file.lineEnding = detectLineEnding(raw)
+        file.text = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        return file
+    }
+
+    /// Encodings offered in the Encoding menus.
+    public static let menuEncodings: [(encoding: String.Encoding, bom: Bool, name: String)] = [
+        (.utf8, false, "UTF-8"), (.utf8, true, "UTF-8 (BOM)"), (.utf16LittleEndian, true, "UTF-16 LE"),
+        (.utf16BigEndian, true, "UTF-16 BE"), (.shiftJIS, false, "Shift_JIS"), (.japaneseEUC, false, "EUC-JP"),
+        (.isoLatin1, false, "ISO-8859-1"),
+    ]
+
     public static func decode(_ data: Data) -> TextFile {
         var file = TextFile.empty
         file.exists = true

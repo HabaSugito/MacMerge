@@ -8,6 +8,9 @@ struct PaneInfo {
     var title: String
     var file: TextFile
     var isDirty = false
+    var isReadOnly = false
+    /// Bookmarked line numbers.
+    var bookmarks: Set<Int> = []
 }
 
 /// Owns the text panes of a file comparison (2 panes, or 3 for a three-way merge) and keeps
@@ -15,8 +18,11 @@ struct PaneInfo {
 @MainActor
 final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegate {
     let target: CompareTarget
-    let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    let rowHeight: CGFloat
+    private(set) var font = EditorSettings.font
+    private(set) var rowHeight: CGFloat
+    private var tabWidth = EditorSettings.tabWidth
+    private var syntaxHighlighting = EditorSettings.syntaxHighlighting
+    private var highlighters: [SyntaxHighlighter?] = []
     let panes: [DiffPane]
 
     @Published private(set) var hunks: [DiffHunk] = []
@@ -27,6 +33,19 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     @Published private(set) var info: [PaneInfo]
     @Published private(set) var loadError: String?
     @Published private(set) var statusMessage: String?
+    /// Two-way only: line pairs the user has forced onto the same row.
+    @Published private(set) var syncPoints: [(left: Int, right: Int)] = []
+    /// Wrap long lines to the pane width instead of scrolling sideways.
+    @Published var wrapLines = UserDefaults.standard.bool(forKey: "editor.wrapLines") {
+        didSet {
+            guard wrapLines != oldValue else { return }
+            UserDefaults.standard.set(wrapLines, forKey: "editor.wrapLines")
+            for pane in panes { pane.setWrapping(wrapLines) }
+            refreshLayout(syntax: false)
+        }
+    }
+    /// Merge mode (F9): plain arrow keys move between differences and copy them.
+    @Published var mergeMode = false
     @Published var showsInlineDifferences = true {
         didSet { redraw() }
     }
@@ -51,13 +70,24 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     private var lines: [[String]]
     private var lineStarts: [[Int]]
     private var lineToRow: [[Int]]
-    private var leadingGhosts: [Int]
+    /// Height of the filler rows above each pane's first line.
+    private var leadingHeight: [CGFloat]
+    /// Height of every row: one text line, more when a line wraps, 0 when folded away.
+    private(set) var rowHeights: [CGFloat] = []
+    /// Top of each shown row measured from row 0, with the total height as the last element.
+    private(set) var shownTops: [CGFloat] = [0]
+    /// How many screen lines each text line takes in each pane (1 unless wrapped).
+    private var fragmentCounts: [[Int]] = []
+    private var hiddenRowFlags: [Bool] = []
+    private var lastWidths: [CGFloat] = []
+    private var pendingRelayout: DispatchWorkItem?
     private var inlineCache: [Int: [[NSRange]]] = [:]
     private var pendingRecompute: DispatchWorkItem?
     private var isSyncingScroll = false
     private var isMovingCaret = false
-    private var activePane = 0
+    private(set) var activePane = 0
     private var closeGuard: WindowCloseGuard?
+    private var watchers: [FileWatcher] = []
     private(set) var options = CompareSettings.options
 
     weak var window: NSWindow? {
@@ -77,31 +107,40 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         lines = Array(repeating: [], count: count)
         lineStarts = Array(repeating: [], count: count)
         lineToRow = Array(repeating: [], count: count)
-        leadingGhosts = Array(repeating: 0, count: count)
+        leadingHeight = Array(repeating: 0, count: count)
         info = Self.initialInfo(target)
         super.init()
+        highlighters = info.map { SyntaxHighlighter.forFile($0.url ?? target.left) }
         for pane in panes {
             pane.textView.controller = self
             pane.textView.delegate = self
+            pane.setWrapping(wrapLines)
+            pane.textView.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(self, selector: #selector(paneResized(_:)), name: NSView.frameDidChangeNotification, object: pane.textView)
             NotificationCenter.default.addObserver(self, selector: #selector(clipViewScrolled(_:)), name: NSView.boundsDidChangeNotification, object: pane.scrollView.contentView)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged), name: UserDefaults.didChangeNotification, object: nil)
         load()
+        if target.kind != .conflict {
+            watchers = (0..<count).compactMap { p in
+                info[p].url.map { url in FileWatcher(url: url) { [weak self] in self?.fileChangedOnDisk(pane: p) } }
+            }
+        }
         DebugActions.runIfRequested(on: self)
     }
 
     private static func initialInfo(_ t: CompareTarget) -> [PaneInfo] {
         switch t.kind {
         case .conflict:
-            return [PaneInfo(url: nil, title: "自分の変更", file: .empty),
+            return [PaneInfo(url: nil, title: L("My Changes"), file: .empty),
                     PaneInfo(url: t.left, title: t.left.path(percentEncoded: false), file: .empty),
-                    PaneInfo(url: nil, title: "相手の変更", file: .empty)]
+                    PaneInfo(url: nil, title: L("Their Changes"), file: .empty)]
         default:
             var list = [PaneInfo(url: t.left, title: t.left.path(percentEncoded: false), file: .empty)]
             if let middle = t.middle {
                 let saveTo = t.output ?? middle
                 var title = middle.path(percentEncoded: false)
-                if saveTo != middle { title += "（保存先: \(saveTo.lastPathComponent)）" }
+                if saveTo != middle { title += L(" (saves to \(saveTo.lastPathComponent))") }
                 list.append(PaneInfo(url: saveTo, title: title, file: .empty))
             }
             list.append(PaneInfo(url: t.right, title: t.right.path(percentEncoded: false), file: .empty))
@@ -132,14 +171,14 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             case .conflict:
                 let file = try TextFile.load(target.left)
                 guard let conflict = ConflictFile(text: file.text) else {
-                    throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "コンフリクトの印（<<<<<<< と >>>>>>>）が見つかりません。"])
+                    throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "No conflict markers (<<<<<<< and >>>>>>>) were found."])
                 }
                 var ours = file, base = file, theirs = file
                 ours.text = conflict.ours; base.text = conflict.base; theirs.text = conflict.theirs
                 texts = [ours, base, theirs]
-                if !conflict.oursLabel.isEmpty { info[0].title = "自分の変更（\(conflict.oursLabel)）" }
-                if !conflict.theirsLabel.isEmpty { info[2].title = "相手の変更（\(conflict.theirsLabel)）" }
-                statusMessage = "コンフリクトの印 \(conflict.conflictCount) 箇所を読み込みました。中央が保存される結果です"
+                if !conflict.oursLabel.isEmpty { info[0].title = L("My Changes (\(conflict.oursLabel))") }
+                if !conflict.theirsLabel.isEmpty { info[2].title = L("Their Changes (\(conflict.theirsLabel))") }
+                statusMessage = L("Loaded \(conflict.conflictCount) conflict markers. The middle pane is the result that gets saved.")
             default:
                 var urls = [target.left, target.right]
                 if let middle = target.middle { urls.insert(middle, at: 1) }
@@ -179,7 +218,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             hunks = comparison.hunks
             moved = [[:], [:], [:]]
         } else {
-            let comparison = LineComparison(left: lines[0], right: lines[1], options: options)
+            let comparison = LineComparison(left: lines[0], right: lines[1], options: options, syncPoints: syncPoints)
             rows = comparison.rows
             hunks = comparison.hunks
             moved = [comparison.movedLeft, comparison.movedRight]
@@ -192,13 +231,61 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
                 if let l = line(row, pane: p), l < lineToRow[p].count { lineToRow[p][l] = r }
             }
         }
-        updateFolding()
-        for p in 0..<paneCount { applyLayout(pane: p) }
-
         rowCount = rows.count
         if let c = currentHunk, c >= hunks.count { currentHunk = hunks.isEmpty ? nil : hunks.count - 1 }
+        refreshLayout(syntax: true)
+    }
+
+    /// Recomputes folding, row heights and the spacing that keeps the panes aligned.
+    private func refreshLayout(syntax: Bool) {
+        pendingRelayout?.cancel()
+        pendingRelayout = nil
+        updateFolding()
+        if syntax { for p in 0..<paneCount { applySyntax(pane: p) } }
+        measureRows()
+        for p in 0..<paneCount { applyLayout(pane: p) }
+        lastWidths = panes.map { $0.textView.frame.width }
         updateVisibleRows()
         redraw()
+    }
+
+    /// Works out every row's height. Without wrapping each row is one line tall; with
+    /// wrapping a row is as tall as its longest wrapped line in any pane.
+    private func measureRows() {
+        fragmentCounts = lines.map { Array(repeating: 1, count: $0.count) }
+        if wrapLines {
+            for p in 0..<paneCount {
+                guard let lm = panes[p].textView.layoutManager, let container = panes[p].textView.textContainer else { continue }
+                var counts = Array(repeating: 0, count: lines[p].count)
+                lm.ensureLayout(for: container)
+                let starts = lineStarts[p]
+                var l = 0
+                lm.enumerateLineFragments(forGlyphRange: lm.glyphRange(for: container)) { _, _, _, glyphRange, _ in
+                    let c = lm.characterIndexForGlyph(at: glyphRange.location)
+                    while l + 1 < starts.count, starts[l + 1] <= c { l += 1 }
+                    if l < counts.count { counts[l] += 1 }
+                }
+                fragmentCounts[p] = counts.map { max($0, 1) }
+            }
+        }
+        rowHeights = rows.indices.map { r in
+            if hiddenRowFlags.indices.contains(r), hiddenRowFlags[r] { return 0 }
+            let tallest = (0..<paneCount).compactMap { p in line(rows[r], pane: p).map { $0 < fragmentCounts[p].count ? fragmentCounts[p][$0] : 1 } }.max() ?? 1
+            return CGFloat(tallest) * rowHeight
+        }
+        var tops: [CGFloat] = [0]
+        tops.reserveCapacity(shownRows.count + 1)
+        for r in shownRows { tops.append(tops[tops.count - 1] + rowHeights[r]) }
+        shownTops = tops
+    }
+
+    @objc private func paneResized(_ note: Notification) {
+        guard wrapLines, let tv = note.object as? DiffTextView, lastWidths.indices.contains(tv.paneIndex),
+              abs(tv.frame.width - lastWidths[tv.paneIndex]) > 0.5 else { return }
+        pendingRelayout?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refreshLayout(syntax: false) }
+        pendingRelayout = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
     /// Works out which rows to hide for the diff context setting and tells each pane.
@@ -215,6 +302,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
                 hiddenRow[r] = (0..<paneCount).allSatisfy { line(row, pane: $0) != nil }
             }
         }
+        hiddenRowFlags = hiddenRow
         shownRows = rows.indices.filter { !hiddenRow[$0] }
         displayIndex = Array(repeating: 0, count: rows.count)
         var next = shownRows.count
@@ -263,7 +351,39 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         style.minimumLineHeight = rowHeight
         style.maximumLineHeight = rowHeight
         style.paragraphSpacing = spacing
+        style.tabStops = []
+        style.defaultTabInterval = CGFloat(tabWidth) * (" " as NSString).size(withAttributes: [.font: font]).width
         return [.font: font, .foregroundColor: NSColor.textColor, .paragraphStyle: style]
+    }
+
+    /// Colors keywords, strings and comments. Skipped for very large files to keep typing fast.
+    private func applySyntax(pane p: Int) {
+        guard let storage = panes[p].textView.textStorage else { return }
+        storage.beginEditing()
+        if syntaxHighlighting, storage.length < 1_000_000, let highlighter = highlighters[p] {
+            highlighter.apply(to: storage)
+        } else {
+            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: NSRange(location: 0, length: storage.length))
+        }
+        storage.endEditing()
+    }
+
+    /// Picks up font, tab width and syntax setting changes.
+    private func applyEditorSettings() -> Bool {
+        let newFont = EditorSettings.font, newTab = EditorSettings.tabWidth, newSyntax = EditorSettings.syntaxHighlighting
+        guard newFont != font || newTab != tabWidth || newSyntax != syntaxHighlighting else { return false }
+        font = newFont
+        tabWidth = newTab
+        syntaxHighlighting = newSyntax
+        rowHeight = ceil(NSLayoutManager().defaultLineHeight(for: font))
+        for pane in panes {
+            guard let storage = pane.textView.textStorage else { continue }
+            storage.beginEditing()
+            storage.addAttribute(.font, value: font, range: NSRange(location: 0, length: storage.length))
+            storage.endEditing()
+            pane.textView.font = font
+        }
+        return true
     }
 
     /// Adds paragraph spacing under lines that are followed by filler rows, so all panes line up.
@@ -271,38 +391,41 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         let tv = panes[p].textView
         guard let storage = tv.textStorage else { return }
 
-        var leading = 0
-        var spacingAfter: [Int: Int] = [:]
+        // Space under a line = the extra height of its row (when another pane's line wraps
+        // further) plus the filler rows that follow it on this pane.
+        var leading: CGFloat = 0
+        var spacingAfter: [Int: CGFloat] = [:]
         var lastLine: Int?
-        var ghosts = 0
-        for row in rows {
+        var pending: CGFloat = 0
+        for (r, row) in rows.enumerated() {
             if let l = line(row, pane: p) {
-                if ghosts > 0 {
-                    if let lastLine { spacingAfter[lastLine] = ghosts } else { leading = ghosts }
+                if pending > 0 {
+                    if let lastLine { spacingAfter[lastLine, default: 0] += pending } else { leading += pending }
                 }
-                ghosts = 0
                 lastLine = l
+                let own = hiddenRowFlags[r] ? 0 : CGFloat(l < fragmentCounts[p].count ? fragmentCounts[p][l] : 1) * rowHeight
+                pending = max(0, rowHeights[r] - own)
             } else {
-                ghosts += 1
+                pending += rowHeights[r]
             }
         }
-        leadingGhosts[p] = leading
+        leadingHeight[p] = leading
 
         let full = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
         storage.addAttribute(.paragraphStyle, value: baseAttributes(spacing: 0)[.paragraphStyle]!, range: full)
-        for (l, count) in spacingAfter {
+        for (l, spacing) in spacingAfter where spacing > 0 {
             guard l + 1 < lineStarts[p].count else { continue }
             let start = lineStarts[p][l]
             let range = NSRange(location: start, length: lineStarts[p][l + 1] - start)
             guard NSMaxRange(range) <= storage.length else { continue }
-            storage.addAttribute(.paragraphStyle, value: baseAttributes(spacing: CGFloat(count) * rowHeight)[.paragraphStyle]!, range: range)
+            storage.addAttribute(.paragraphStyle, value: baseAttributes(spacing: spacing)[.paragraphStyle]!, range: range)
         }
         storage.endEditing()
         tv.typingAttributes = baseAttributes(spacing: 0)
-        tv.textContainerInset = NSSize(width: 4, height: CGFloat(leading) * rowHeight)
+        tv.textContainerInset = NSSize(width: 4, height: leading)
 
-        let height = CGFloat(shownRows.count + (leadingGhosts.max() ?? 0)) * rowHeight + 40
+        let height = (shownTops.last ?? 0) + (leadingHeight.max() ?? 0) + 40
         tv.minSize = NSSize(width: 0, height: height)
         tv.sizeToFit()
     }
@@ -318,7 +441,18 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
 
     /// The y position of row 0 in the text view's coordinates.
     func rowOriginY(in textView: NSTextView, pane: Int) -> CGFloat {
-        textView.textContainerOrigin.y - CGFloat(leadingGhosts[pane]) * rowHeight
+        textView.textContainerOrigin.y - leadingHeight[pane]
+    }
+
+    /// The shown row at a vertical offset from row 0.
+    func displayRow(atOffset y: CGFloat) -> Int {
+        guard shownTops.count > 1 else { return 0 }
+        var lo = 0, hi = shownTops.count - 2
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if shownTops[mid] <= y { lo = mid } else { hi = mid - 1 }
+        }
+        return lo
     }
 
     func lineStart(pane: Int, line: Int) -> Int? {
@@ -387,10 +521,16 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
 
     @objc private func defaultsChanged() {
         let new = CompareSettings.options
-        guard new != options else { return }
-        options = new
-        currentHunk = nil
-        recomputeNow()
+        let editorChanged = applyEditorSettings()
+        if new != options {
+            options = new
+            currentHunk = nil
+            recomputeNow()
+        } else if editorChanged {
+            recomputeNow()
+        } else {
+            redraw() // colors may have changed
+        }
     }
 
     // MARK: Scrolling
@@ -412,9 +552,10 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         let tv = panes[0].textView
         let visible = panes[0].scrollView.contentView.bounds
         let top = rowOriginY(in: tv, pane: 0)
-        let first = max(0, Int((visible.minY - top) / rowHeight))
-        let last = max(first, min(shownRows.count, Int(ceil((visible.maxY - top) / rowHeight))))
-        let range = first < last ? shownRows[first]..<(shownRows[last - 1] + 1) : 0..<0
+        guard !shownRows.isEmpty else { visibleRows = 0..<0; return }
+        let first = displayRow(atOffset: visible.minY - top)
+        let last = displayRow(atOffset: visible.maxY - top)
+        let range = shownRows[first]..<(shownRows[last] + 1)
         if range != visibleRows { visibleRows = range }
     }
 
@@ -422,8 +563,8 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     func scrollToRow(_ row: Int, centered: Bool = true) {
         let tv = panes[0].textView
         let clip = panes[0].scrollView.contentView
-        let shown = displayIndex.indices.contains(row) ? displayIndex[row] : row
-        let y = rowOriginY(in: tv, pane: 0) + CGFloat(shown) * rowHeight
+        let shown = displayIndex.indices.contains(row) ? min(displayIndex[row], shownTops.count - 1) : 0
+        let y = rowOriginY(in: tv, pane: 0) + shownTops[max(shown, 0)]
         let offset = centered ? clip.bounds.height / 3 : 0
         let origin = clip.constrainBoundsRect(NSRect(x: clip.bounds.minX, y: y - offset, width: clip.bounds.width, height: clip.bounds.height)).origin
         clip.setBoundsOrigin(origin)
@@ -518,7 +659,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         undo?.beginUndoGrouping()
         apply(hunks[index], from: src, to: dst)
         undo?.endUndoGrouping()
-        undo?.setActionName("差分をコピー")
+        undo?.setActionName(L("Copy Difference"))
         recomputeNow()
         if advance, !hunks.isEmpty {
             select(hunk: min(index, hunks.count - 1))
@@ -539,7 +680,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         // Work from the bottom up so earlier line numbers stay valid.
         for hunk in hunks.reversed() { apply(hunk, from: src, to: dst) }
         undo?.endUndoGrouping()
-        undo?.setActionName("すべてコピー")
+        undo?.setActionName(L("Copy All"))
         currentHunk = nil
         recomputeNow()
     }
@@ -551,7 +692,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         recomputeIfPending()
         let mergeable = hunks.filter { $0.kind != .conflict }
         guard !mergeable.isEmpty else {
-            statusMessage = "自動でマージできる差分はありません"
+            statusMessage = L("There are no differences that can be merged automatically")
             return
         }
         let undo = panes[1].textView.undoManager
@@ -560,11 +701,13 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             apply(hunk, from: hunk.kind == .rightOnly ? 2 : 0, to: 1)
         }
         undo?.endUndoGrouping()
-        undo?.setActionName("自動マージ")
+        undo?.setActionName(L("Auto Merge"))
         currentHunk = nil
         recomputeNow()
         let left = conflictCount
-        statusMessage = "\(mergeable.count) 箇所を自動でマージしました" + (left > 0 ? "。残りのコンフリクトは \(left) 箇所です" : "")
+        statusMessage = left > 0
+            ? L("Merged \(mergeable.count) differences automatically. \(left) conflicts remain.")
+            : L("Merged \(mergeable.count) differences automatically.")
         if left > 0, let first = hunks.firstIndex(where: { $0.kind == .conflict }) { select(hunk: first) }
     }
 
@@ -612,6 +755,177 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         tv.didChangeText()
     }
 
+    /// Reloads a pane whose file another app changed, unless it has unsaved edits.
+    private func fileChangedOnDisk(pane p: Int) {
+        guard let url = info[p].url, let file = try? TextFile.load(url), file.exists, !file.isBinary else { return }
+        guard file.text != panes[p].textView.string else { return } // e.g. our own save
+        let name = url.lastPathComponent
+        if info[p].isDirty {
+            statusMessage = L("\(name) was changed by another app. Your unsaved edits were kept.")
+            return
+        }
+        info[p].file = file
+        let tv = panes[p].textView
+        tv.textStorage?.setAttributedString(NSAttributedString(string: file.text, attributes: baseAttributes(spacing: 0)))
+        tv.undoManager?.removeAllActions()
+        currentHunk = nil
+        recomputeNow()
+        statusMessage = L("Reloaded \(name) because it was changed by another app.")
+    }
+
+    // MARK: Editing tools
+
+    /// Moves the caret to a 1-based line in the active pane.
+    func goToLine(_ number: Int) {
+        let p = activePane
+        let l = min(max(number - 1, 0), max(lineStarts[p].count - 1, 0))
+        guard let start = lineStart(pane: p, line: l) else { return }
+        panes[p].textView.setSelectedRange(NSRange(location: start, length: 0))
+        panes[p].textView.window?.makeFirstResponder(panes[p].textView)
+        if l < lineToRow[p].count { scrollToRow(lineToRow[p][l]) }
+    }
+
+    /// Asks for a line number and goes there.
+    func promptGoToLine() {
+        let alert = NSAlert()
+        alert.messageText = L("Go to Line")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        field.placeholderString = L("Line number")
+        alert.accessoryView = field
+        alert.addButton(withTitle: L("Go"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn, let number = Int(field.stringValue.trimmingCharacters(in: .whitespaces)) else { return }
+        goToLine(number)
+    }
+
+    func caretLine(pane p: Int) -> Int {
+        let location = panes[p].textView.selectedRange().location
+        let starts = lineStarts[p]
+        var lo = 0, hi = max(starts.count - 1, 0)
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if starts[mid] <= location { lo = mid } else { hi = mid - 1 }
+        }
+        return lo
+    }
+
+    func toggleBookmark() {
+        let l = caretLine(pane: activePane)
+        if info[activePane].bookmarks.contains(l) { info[activePane].bookmarks.remove(l) } else { info[activePane].bookmarks.insert(l) }
+        redraw()
+    }
+
+    func nextBookmark(forward: Bool = true) {
+        let marks = info[activePane].bookmarks.sorted()
+        guard !marks.isEmpty else { return }
+        let l = caretLine(pane: activePane)
+        let target = forward ? (marks.first { $0 > l } ?? marks[0]) : (marks.last { $0 < l } ?? marks[marks.count - 1])
+        goToLine(target + 1)
+    }
+
+    func clearBookmarks() {
+        for p in 0..<paneCount { info[p].bookmarks = [] }
+        redraw()
+    }
+
+    /// Makes the lines under the left and right carets line up (WinMerge's synchronization point).
+    func addSyncPoint() {
+        guard !isThreeWay else { return }
+        recomputeIfPending()
+        let point = (left: caretLine(pane: 0), right: caretLine(pane: 1))
+        // Drop points that would cross the new one.
+        syncPoints.removeAll { ($0.left <= point.left) != ($0.right <= point.right) || $0.left == point.left || $0.right == point.right }
+        syncPoints.append(point)
+        syncPoints.sort { $0.left < $1.left }
+        currentHunk = nil
+        recomputeNow()
+        statusMessage = L("Synchronization point added at left line \(point.left + 1) and right line \(point.right + 1).")
+    }
+
+    func clearSyncPoints() {
+        syncPoints = []
+        recomputeNow()
+    }
+
+    func isSyncLine(_ line: Int, pane p: Int) -> Bool {
+        !isThreeWay && syncPoints.contains { (p == 0 ? $0.left : $0.right) == line }
+    }
+
+    func setReadOnly(_ readOnly: Bool, pane p: Int) {
+        info[p].isReadOnly = readOnly
+        panes[p].textView.isEditable = !readOnly
+    }
+
+    /// Swaps the left and right panes, keeping unsaved edits.
+    func swapSides() {
+        recomputeIfPending()
+        let a = 0, b = paneCount - 1
+        let texts = [panes[a].textView.string, panes[b].textView.string]
+        info.swapAt(a, b)
+        highlighters.swapAt(a, b)
+        for (p, text) in [(a, texts[1]), (b, texts[0])] {
+            let tv = panes[p].textView
+            tv.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: baseAttributes(spacing: 0)))
+            tv.undoManager?.removeAllActions()
+            tv.isEditable = !info[p].isReadOnly
+        }
+        currentHunk = nil
+        recomputeNow()
+        updateDocumentEdited()
+    }
+
+    /// Changes the line ending used when the pane is saved.
+    func setLineEnding(_ ending: LineEnding, pane p: Int) {
+        guard info[p].file.lineEnding != ending else { return }
+        info[p].file.lineEnding = ending
+        info[p].isDirty = info[p].url != nil
+        updateDocumentEdited()
+    }
+
+    /// Changes the encoding used when the pane is saved.
+    func setEncoding(_ encoding: String.Encoding, bom: Bool, pane p: Int) {
+        guard info[p].file.encoding != encoding || info[p].file.hasBOM != bom else { return }
+        info[p].file.encoding = encoding
+        info[p].file.hasBOM = bom
+        info[p].isDirty = info[p].url != nil
+        updateDocumentEdited()
+    }
+
+    /// Reads the pane's file again, decoding it with `encoding`.
+    func reopen(pane p: Int, as encoding: String.Encoding) {
+        guard let url = info[p].url ?? (p == 0 ? target.left : target.right) as URL? else { return }
+        if info[p].isDirty, !confirmDiscard(message: L("Reloading discards unsaved changes.")) { return }
+        guard let data = try? Data(contentsOf: url), let file = TextFile.decode(data, as: encoding) else {
+            let alert = NSAlert()
+            alert.messageText = L("The file cannot be read with this encoding")
+            alert.runModal()
+            return
+        }
+        info[p].file = file
+        info[p].isDirty = false
+        let tv = panes[p].textView
+        tv.textStorage?.setAttributedString(NSAttributedString(string: file.text, attributes: baseAttributes(spacing: 0)))
+        tv.undoManager?.removeAllActions()
+        recomputeNow()
+        updateDocumentEdited()
+    }
+
+    /// Opens the pane's file in another app: the default one, or one the user picks.
+    func openExternally(pane p: Int, choosingApp: Bool) {
+        guard let url = info[p].url, FileManager.default.fileExists(atPath: url.path) else { return }
+        guard choosingApp else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(filePath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.message = L("Choose an app to open the file with")
+        guard panel.runModal() == .OK, let app = panel.url else { return }
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    }
+
     // MARK: Patch and report
 
     /// A unified patch from the left pane to the right pane (two-way only).
@@ -650,10 +964,10 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         var data = file.encode(text)
         if data == nil {
             let alert = NSAlert()
-            alert.messageText = "\(file.encodingName) では保存できない文字が含まれています"
-            alert.informativeText = "UTF-8 で保存しますか？"
-            alert.addButton(withTitle: "UTF-8 で保存")
-            alert.addButton(withTitle: "キャンセル")
+            alert.messageText = L("The text contains characters that cannot be saved in \(file.encodingName)")
+            alert.informativeText = L("Save it as UTF-8?")
+            alert.addButton(withTitle: L("Save as UTF-8"))
+            alert.addButton(withTitle: L("Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return false }
             file.encoding = .utf8
             file.hasBOM = false
@@ -676,17 +990,17 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     func saveAll() {
         if target.kind == .conflict, conflictCount > 0 {
             let alert = NSAlert()
-            alert.messageText = "まだ \(conflictCount) 箇所のコンフリクトが残っています"
-            alert.informativeText = "このまま保存すると、残ったコンフリクトの部分は中央の内容（空の場合あり）になります。"
-            alert.addButton(withTitle: "保存")
-            alert.addButton(withTitle: "キャンセル")
+            alert.messageText = L("\(conflictCount) conflicts are still unresolved")
+            alert.informativeText = L("If you save now, the unresolved parts keep the contents of the middle pane (which may be empty).")
+            alert.addButton(withTitle: L("Save"))
+            alert.addButton(withTitle: L("Cancel"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         for p in 0..<paneCount where info[p].isDirty { save(pane: p) }
     }
 
     func reload() {
-        guard confirmDiscard(message: "ファイルを読み直すと、保存していない変更は失われます。") else { return }
+        guard confirmDiscard(message: L("Reloading discards unsaved changes.")) else { return }
         load()
     }
 
@@ -697,10 +1011,10 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     private func confirmDiscard(message: String) -> Bool {
         guard isDirty else { return true }
         let alert = NSAlert()
-        alert.messageText = "保存していない変更があります"
+        alert.messageText = L("There are unsaved changes")
         alert.informativeText = message
-        alert.addButton(withTitle: "続ける")
-        alert.addButton(withTitle: "キャンセル")
+        alert.addButton(withTitle: L("Continue"))
+        alert.addButton(withTitle: L("Cancel"))
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -708,11 +1022,11 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     private func confirmClose() -> Bool {
         guard isDirty else { return true }
         let alert = NSAlert()
-        alert.messageText = "変更を保存しますか？"
-        alert.informativeText = "保存しないと、変更は失われます。"
-        alert.addButton(withTitle: "保存")
-        alert.addButton(withTitle: "キャンセル")
-        alert.addButton(withTitle: "保存しない")
+        alert.messageText = L("Do you want to save the changes?")
+        alert.informativeText = L("Your changes will be lost if you don’t save them.")
+        alert.addButton(withTitle: L("Save"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.addButton(withTitle: L("Don’t Save"))
         switch alert.runModal() {
         case .alertFirstButtonReturn:
             saveAll()
@@ -792,8 +1106,24 @@ enum DebugActions {
                 case "saveAll": c.saveAll()
                 case "saveRight": c.save(pane: c.paneCount - 1)
                 case "saveLeft": c.save(pane: 0)
-                case "typeLeft": c.panes[0].textView.insertText("追加した行\n", replacementRange: NSRange(location: 0, length: 0))
+                case "typeLeft": c.panes[0].textView.insertText("Added line\n", replacementRange: NSRange(location: 0, length: 0))
                 case "recompute": c.recomputeNow()
+                case "swap": c.swapSides()
+                case "wrap": c.wrapLines = true
+                case "geometry":
+                    for pane in c.panes {
+                        let tv = pane.textView
+                        FileHandle.standardError.write(Data("pane \(tv.paneIndex): clip=\(pane.scrollView.contentView.bounds) content=\(pane.scrollView.contentSize) tv=\(tv.frame) container=\(tv.textContainer!.containerSize) inset=\(tv.textContainerInset) origin=\(tv.textContainerOrigin) bounds=\(tv.bounds) frag0=\(tv.layoutManager!.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)) used0=\(tv.layoutManager!.lineFragmentUsedRect(forGlyphAt: 0, effectiveRange: nil)) loc0=\(tv.layoutManager!.location(forGlyphAt: 0))\n".utf8))
+                    }
+                case "nowrap": c.wrapLines = false
+                case "syncDemo":
+                    // Put the left caret on line 3 and the right caret on line 2, then sync.
+                    c.panes[0].textView.setSelectedRange(NSRange(location: c.lineStart(pane: 0, line: 2) ?? 0, length: 0))
+                    c.panes[1].textView.setSelectedRange(NSRange(location: c.lineStart(pane: 1, line: 1) ?? 0, length: 0))
+                    c.addSyncPoint()
+                case "bookmark": c.toggleBookmark()
+                case "crlfLeft": c.setLineEnding(.crlf, pane: 0)
+                case "sjisLeft": c.setEncoding(.shiftJIS, bom: false, pane: 0)
                 case "context0": c.diffContext = 0
                 case "context2": c.diffContext = 2
                 case "contextAll": c.diffContext = nil

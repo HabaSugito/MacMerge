@@ -16,6 +16,15 @@ final class FolderCompareModel: ObservableObject {
     @Published var showLeftOnly = true { didSet { refilter() } }
     @Published var showRightOnly = true { didSet { refilter() } }
     @Published var filterText = CompareSettings.fileFilter
+    /// Tree view (folders that open and close) or a flat list of every file.
+    @Published var treeMode = UserDefaults.standard.object(forKey: "folder.treeMode") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(treeMode, forKey: "folder.treeMode"); refilter() }
+    }
+    /// Compare again automatically when files in either folder change.
+    @Published var watchesChanges = UserDefaults.standard.object(forKey: "folder.watchChanges") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(watchesChanges, forKey: "folder.watchChanges"); updateWatcher() }
+    }
+    private var watcher: FolderWatcher?
 
     private var options = CompareSettings.options
     private var cancelFlag: CancelFlag?
@@ -24,6 +33,7 @@ final class FolderCompareModel: ObservableObject {
     init(target: CompareTarget) {
         self.target = target
         compare()
+        updateWatcher()
         defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.defaultsChanged() }
         }
@@ -33,11 +43,21 @@ final class FolderCompareModel: ObservableObject {
         if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
     }
 
+    private var detectRenames = CompareSettings.detectRenames
+
     private func defaultsChanged() {
         let new = CompareSettings.options
-        guard new != options else { return }
+        guard new != options || detectRenames != CompareSettings.detectRenames else { return }
         options = new
+        detectRenames = CompareSettings.detectRenames
         compare()
+    }
+
+    private func updateWatcher() {
+        watcher = watchesChanges ? FolderWatcher(paths: [target.left, target.right]) { [weak self] in
+            guard let self, !self.isComparing else { return }
+            self.compare()
+        } : nil
     }
 
     // MARK: Comparing
@@ -49,7 +69,7 @@ final class FolderCompareModel: ObservableObject {
         isComparing = true
         progress = 0
         let left = target.left, right = target.right
-        let comparer = FolderComparer(options: options, filter: FileFilter(filterText))
+        let comparer = FolderComparer(options: options, filter: FileFilter(filterText), detectRenames: detectRenames)
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> [FolderItem] in
                 comparer.compare(left: left, right: right, progress: { count in
@@ -72,7 +92,21 @@ final class FolderCompareModel: ObservableObject {
     }
 
     private func refilter() {
-        visibleItems = sorted(filter(items))
+        let filtered = sorted(filter(items))
+        visibleItems = treeMode ? filtered : flatten(filtered).sorted(using: sortOrder)
+    }
+
+    /// Every file, plus folders that exist on one side only, without nesting.
+    private func flatten(_ list: [FolderItem]) -> [FolderItem] {
+        list.flatMap { item -> [FolderItem] in
+            guard let children = item.children else { return [item] }
+            if item.left == nil || item.right == nil {
+                var folder = item
+                folder.children = nil
+                return [folder]
+            }
+            return flatten(children)
+        }
     }
 
     private func isShown(_ item: FolderItem) -> Bool {
@@ -177,6 +211,36 @@ final class FolderCompareModel: ObservableObject {
         return patch
     }
 
+    // MARK: Other actions
+
+    /// Packs the selected items of one side into a Zip file, keeping their folder paths.
+    func zipSelected(left: Bool) {
+        let items = selectedItems.filter { left ? $0.left != nil : $0.right != nil }
+        guard !items.isEmpty else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = (left ? target.left : target.right).lastPathComponent + ".zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        try? FileManager.default.removeItem(at: dest)
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/zip")
+        process.currentDirectoryURL = left ? target.left : target.right
+        process.arguments = ["-r", "-q", dest.path] + items.map(relativePath)
+        do {
+            try process.run()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 { NSWorkspace.shared.activateFileViewerSelecting([dest]) }
+        } catch {
+            NSAlert(error: error).runModal()
+        }
+    }
+
+    func openExternally(_ ids: Set<FolderItem.ID>, left: Bool) {
+        for item in ids.compactMap(find) where (left ? item.left : item.right) != nil {
+            NSWorkspace.shared.open(url(item, left: left))
+        }
+    }
+
     // MARK: File operations
 
     /// Items that can be copied in the given direction: they exist on the source side
@@ -193,11 +257,17 @@ final class FolderCompareModel: ObservableObject {
         let items = copyable(toRight: toRight)
         guard !items.isEmpty else { return }
         let alert = NSAlert()
-        alert.messageText = "\(items.count) 項目を\(toRight ? "右" : "左")へコピーしますか？"
-        alert.informativeText = itemList(items) + "\n\n同じ名前のファイルは上書きされます。"
-        alert.addButton(withTitle: "コピー")
-        alert.addButton(withTitle: "キャンセル")
+        alert.messageText = toRight ? L("Copy \(items.count) items to the right?") : L("Copy \(items.count) items to the left?")
+        alert.informativeText = itemList(items) + "\n\n" + L("Files with the same name will be replaced.")
+        alert.addButton(withTitle: L("Copy"))
+        alert.addButton(withTitle: L("Cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        showErrors(performCopy(items, toRight: toRight))
+    }
+
+    /// Copies items without asking. Returns a message for each item that failed.
+    @discardableResult
+    func performCopy(_ items: [FolderItem], toRight: Bool) -> [String] {
         perform(items) { try FileOperations.copy(self.url($0, left: toRight), to: self.url($0, left: !toRight)) }
     }
 
@@ -209,39 +279,48 @@ final class FolderCompareModel: ObservableObject {
         let hasLeft = items.contains { $0.left != nil }
         let hasRight = items.contains { $0.right != nil }
         let alert = NSAlert()
-        alert.messageText = "\(items.count) 項目をゴミ箱に移動しますか？"
+        alert.messageText = L("Move \(items.count) items to the Trash?")
         alert.informativeText = itemList(items)
         var choices: [(left: Bool, right: Bool)] = []
-        if hasLeft && hasRight { alert.addButton(withTitle: "両方"); choices.append((true, true)) }
-        if hasLeft { alert.addButton(withTitle: "左のみ"); choices.append((true, false)) }
-        if hasRight { alert.addButton(withTitle: "右のみ"); choices.append((false, true)) }
-        alert.addButton(withTitle: "キャンセル")
+        if hasLeft && hasRight { alert.addButton(withTitle: L("Both")); choices.append((true, true)) }
+        if hasLeft { alert.addButton(withTitle: L("Left only")); choices.append((true, false)) }
+        if hasRight { alert.addButton(withTitle: L("Right only")); choices.append((false, true)) }
+        alert.addButton(withTitle: L("Cancel"))
         let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard choices.indices.contains(index) else { return }
         let choice = choices[index]
+        showErrors(performTrash(items, left: choice.left, right: choice.right))
+    }
+
+    /// Moves items to the Trash without asking. Returns a message for each item that failed.
+    @discardableResult
+    func performTrash(_ items: [FolderItem], left: Bool, right: Bool) -> [String] {
         perform(items) { item in
-            if choice.left, item.left != nil { try FileOperations.moveToTrash(self.url(item, left: true)) }
-            if choice.right, item.right != nil { try FileOperations.moveToTrash(self.url(item, left: false)) }
+            if left, item.left != nil { try FileOperations.moveToTrash(self.url(item, left: true)) }
+            if right, item.right != nil { try FileOperations.moveToTrash(self.url(item, left: false)) }
         }
     }
 
-    private func perform(_ items: [FolderItem], _ operation: (FolderItem) throws -> Void) {
+    private func perform(_ items: [FolderItem], _ operation: (FolderItem) throws -> Void) -> [String] {
         var errors: [String] = []
         for item in items {
             do { try operation(item) } catch { errors.append("\(relativePath(item)): \(error.localizedDescription)") }
         }
-        if !errors.isEmpty {
-            let alert = NSAlert()
-            alert.messageText = "一部の項目を処理できませんでした"
-            alert.informativeText = errors.prefix(10).joined(separator: "\n")
-            alert.runModal()
-        }
         compare()
+        return errors
+    }
+
+    private func showErrors(_ errors: [String]) {
+        guard !errors.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Some items could not be processed")
+        alert.informativeText = errors.prefix(10).joined(separator: "\n")
+        alert.runModal()
     }
 
     private func itemList(_ items: [FolderItem]) -> String {
         let names = items.prefix(8).map(relativePath)
-        return names.joined(separator: "\n") + (items.count > 8 ? "\nほか \(items.count - 8) 項目" : "")
+        return names.joined(separator: "\n") + (items.count > 8 ? "\n" + L("and \(items.count - 8) more") : "")
     }
 }
 
@@ -258,9 +337,11 @@ extension FolderItem {
         case .leftOnly: return 1
         case .rightOnly: return 2
         case .error: return 3
+        case .moved: return 1
         case .identical, .binaryIdentical: return 4
         }
     }
+    var folderPath: String { (id.replacingOccurrences(of: "\u{0}r", with: "") as NSString).deletingLastPathComponent }
     var leftDate: Date { left?.modified ?? .distantPast }
     var rightDate: Date { right?.modified ?? .distantPast }
     var leftSize: Int64 { left?.size ?? -1 }
@@ -270,6 +351,7 @@ extension FolderItem {
 struct FolderCompareView: View {
     @StateObject private var model: FolderCompareModel
     @Environment(\.openWindow) private var openWindow
+    @State private var columns = FolderColumns.load()
 
     init(target: CompareTarget) {
         _model = StateObject(wrappedValue: FolderCompareModel(target: target))
@@ -278,9 +360,9 @@ struct FolderCompareView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                pathLabel("左", model.target.left)
+                pathLabel("Left", model.target.left)
                 Divider()
-                pathLabel("右", model.target.right)
+                pathLabel("Right", model.target.right)
             }
             .fixedSize(horizontal: false, vertical: true)
             Divider()
@@ -291,11 +373,12 @@ struct FolderCompareView: View {
         .navigationTitle(model.target.title)
         .toolbar { toolbar }
         .focusedSceneValue(\.folderCompare, model)
+        .onAppear { RecentComparisons.shared.add(model.target) }
     }
 
     private var table: some View {
-        Table(model.visibleItems, children: \.children, selection: $model.selection, sortOrder: $model.sortOrder) {
-            TableColumn("名前", value: \.name) { item in
+        Table(model.visibleItems, children: \.children, selection: $model.selection, sortOrder: $model.sortOrder, columnCustomization: $columns) {
+            TableColumn("Name", value: \.name) { item in
                 Label {
                     Text(item.name)
                 } icon: {
@@ -304,49 +387,71 @@ struct FolderCompareView: View {
                 }
             }
             .width(min: 160, ideal: 260)
-            TableColumn("比較結果", value: \.resultSortKey) { item in
+            .customizationID("name")
+            .disabledCustomizationBehavior(.visibility)
+            TableColumn("Folder", value: \.folderPath) { item in Text(item.folderPath).foregroundStyle(.secondary) }
+                .width(min: 80, ideal: 180)
+                .customizationID("folder")
+                .defaultVisibility(.hidden)
+            TableColumn("Result", value: \.resultSortKey) { item in
                 ResultLabel(result: item.result)
             }
             .width(min: 110, ideal: 190)
-            TableColumn("左の更新日時", value: \.leftDate) { item in Text(date(item.left)) }
+            .customizationID("result")
+            TableColumn("Left Modified", value: \.leftDate) { item in Text(date(item.left)) }
                 .width(min: 90, ideal: 140)
-            TableColumn("右の更新日時", value: \.rightDate) { item in Text(date(item.right)) }
+                .customizationID("leftDate")
+            TableColumn("Right Modified", value: \.rightDate) { item in Text(date(item.right)) }
                 .width(min: 90, ideal: 140)
-            TableColumn("左のサイズ", value: \.leftSize) { item in Text(size(item.left, item.isDirectory)).monospacedDigit() }
+                .customizationID("rightDate")
+            TableColumn("Left Size", value: \.leftSize) { item in Text(size(item.left, item.isDirectory)).monospacedDigit() }
                 .width(min: 60, ideal: 80)
-            TableColumn("右のサイズ", value: \.rightSize) { item in Text(size(item.right, item.isDirectory)).monospacedDigit() }
+                .customizationID("leftSize")
+            TableColumn("Right Size", value: \.rightSize) { item in Text(size(item.right, item.isDirectory)).monospacedDigit() }
                 .width(min: 60, ideal: 80)
-            TableColumn("拡張子", value: \.fileExtension) { item in Text(item.fileExtension) }
+                .customizationID("rightSize")
+            TableColumn("Extension", value: \.fileExtension) { item in Text(item.fileExtension) }
                 .width(min: 40, ideal: 60)
+                .customizationID("extension")
+        }
+        .onChange(of: columns) { _, new in FolderColumns.save(new) }
+        .onChange(of: model.treeMode) { _, tree in
+            // The folder column is what tells files apart in the flat list.
+            columns[visibility: "folder"] = tree ? .hidden : .visible
         }
         .contextMenu(forSelectionType: FolderItem.ID.self) { ids in
-            Button("比較") { open(ids) }
+            Button("Compare") { open(ids) }
                 .disabled(ids.isEmpty)
             Divider()
-            Button("右へコピー…") { model.selection = ids; model.copySelected(toRight: true) }
+            Button("Copy to Right…") { model.selection = ids; model.copySelected(toRight: true) }
                 .disabled(ids.isEmpty)
-            Button("左へコピー…") { model.selection = ids; model.copySelected(toRight: false) }
+            Button("Copy to Left…") { model.selection = ids; model.copySelected(toRight: false) }
                 .disabled(ids.isEmpty)
-            Button("ゴミ箱に入れる…") { model.selection = ids; model.deleteSelected() }
+            Button("Move to Trash…") { model.selection = ids; model.deleteSelected() }
                 .disabled(ids.isEmpty)
             Divider()
-            Button("左を Finder で表示") { reveal(ids, left: true) }
-            Button("右を Finder で表示") { reveal(ids, left: false) }
+            Button("Show Left in Finder") { reveal(ids, left: true) }
+            Button("Show Right in Finder") { reveal(ids, left: false) }
+            Button("Open Left in Default App") { model.openExternally(ids, left: true) }
+            Button("Open Right in Default App") { model.openExternally(ids, left: false) }
+            Divider()
+            Button("Zip Left Items…") { model.selection = ids; model.zipSelected(left: true) }
+            Button("Zip Right Items…") { model.selection = ids; model.zipSelected(left: false) }
         } primaryAction: { ids in
             open(ids)
         }
         .overlay {
             if model.isComparing {
-                ProgressView("比較中… \(model.progress) ファイル")
+                ProgressView("Comparing… \(model.progress) files")
                     .padding()
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
             } else if model.items.isEmpty {
-                ContentUnavailableView("ファイルがありません", systemImage: "folder")
+                ContentUnavailableView("No Files", systemImage: "folder")
             }
         }
     }
 
-    private func pathLabel(_ label: String, _ url: URL) -> some View {
+    private func pathLabel(_ label: LocalizedStringKey, _ url: URL) -> some View {
         HStack(spacing: 6) {
             Text(label).foregroundStyle(.secondary)
             Text(url.path(percentEncoded: false)).lineLimit(1).truncationMode(.head).textSelection(.enabled)
@@ -362,13 +467,13 @@ struct FolderCompareView: View {
     private var statusBar: some View {
         let c = model.counts
         return HStack(spacing: 16) {
-            Text("同一 \(c.identical)")
-            Text("異なる \(c.different)")
-            Text("左のみ \(c.leftOnly)")
-            Text("右のみ \(c.rightOnly)")
+            Text("Identical \(c.identical)")
+            Text("Different \(c.different)")
+            Text("Left only \(c.leftOnly)")
+            Text("Right only \(c.rightOnly)")
             Spacer()
             if !model.filterText.isEmpty {
-                Text("フィルタ: \(model.filterText)").lineLimit(1)
+                Text("Filter: \(model.filterText)").lineLimit(1)
             }
         }
         .font(.callout)
@@ -381,38 +486,50 @@ struct FolderCompareView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem {
-            TextField("フィルタ（例: *.swift;!build/）", text: $model.filterText)
+            TextField("Filter (e.g. *.swift;!build/)", text: $model.filterText)
                 .frame(width: 220)
                 .onSubmit { model.applyFilter() }
-                .help("比較するファイルの条件。; で区切り、! を付けると除外。末尾が / ならフォルダ。Return で適用")
+                .help("Which files to compare. Separate patterns with ;, put ! in front to exclude, and end a pattern with / for folders. Press Return to apply.")
         }
         ToolbarItemGroup {
-            Toggle(isOn: $model.showIdentical) { Label("同一", systemImage: "equal.circle") }
-                .help("同一の項目を表示")
-            Toggle(isOn: $model.showDifferent) { Label("異なる", systemImage: "exclamationmark.circle") }
-                .help("異なる項目を表示")
-            Toggle(isOn: $model.showLeftOnly) { Label("左のみ", systemImage: "arrow.left.circle") }
-                .help("左にしかない項目を表示")
-            Toggle(isOn: $model.showRightOnly) { Label("右のみ", systemImage: "arrow.right.circle") }
-                .help("右にしかない項目を表示")
+            Toggle(isOn: $model.showIdentical) { Label("Identical", systemImage: "equal.circle") }
+                .help("Show identical items")
+            Toggle(isOn: $model.showDifferent) { Label("Different", systemImage: "exclamationmark.circle") }
+                .help("Show different items")
+            Toggle(isOn: $model.showLeftOnly) { Label("Left only", systemImage: "arrow.left.circle") }
+                .help("Show items only on the left")
+            Toggle(isOn: $model.showRightOnly) { Label("Right only", systemImage: "arrow.right.circle") }
+                .help("Show items only on the right")
         }
         ToolbarItemGroup {
-            Button { model.copySelected(toRight: false) } label: { Label("左へコピー", systemImage: "arrow.left.square") }
-                .help("選択した項目を左へコピー (⌥←)")
+            Button { model.copySelected(toRight: false) } label: { Label("Copy to Left", systemImage: "arrow.left.square") }
+                .help("Copy the selected items to the left (⌥←)")
                 .disabled(model.copyable(toRight: false).isEmpty)
-            Button { model.copySelected(toRight: true) } label: { Label("右へコピー", systemImage: "arrow.right.square") }
-                .help("選択した項目を右へコピー (⌥→)")
+            Button { model.copySelected(toRight: true) } label: { Label("Copy to Right", systemImage: "arrow.right.square") }
+                .help("Copy the selected items to the right (⌥→)")
                 .disabled(model.copyable(toRight: true).isEmpty)
-            Button { model.deleteSelected() } label: { Label("ゴミ箱に入れる", systemImage: "trash") }
-                .help("選択した項目をゴミ箱に入れる (⌘⌫)")
+            Button { model.deleteSelected() } label: { Label("Move to Trash", systemImage: "trash") }
+                .help("Move the selected items to the Trash (⌘⌫)")
                 .disabled(!model.canDelete)
         }
         ToolbarItem {
-            CompareOptionsMenu()
+            Toggle(isOn: $model.treeMode) { Label("Tree View", systemImage: "list.bullet.indent") }
+                .help("Show folders as a tree, or every file in one flat list")
         }
         ToolbarItem {
-            Button { model.compare() } label: { Label("再比較", systemImage: "arrow.clockwise") }
-                .help("もう一度比較 (⌘R)")
+            Menu {
+                CompareOptionControls()
+                Divider()
+                FolderOptionControls()
+                Toggle("Watch for Changes", isOn: $model.watchesChanges)
+            } label: {
+                Label("Compare Options", systemImage: "slider.horizontal.3")
+            }
+            .help("Compare Options")
+        }
+        ToolbarItem {
+            Button { model.compare() } label: { Label("Compare Again", systemImage: "arrow.clockwise") }
+                .help("Compare again (⌘R)")
         }
     }
 
@@ -421,6 +538,14 @@ struct FolderCompareView: View {
             guard let item = model.find(id) else { continue }
             let left = model.url(item, left: true)
             let right = model.url(item, left: false)
+            if case .moved(let other) = item.result {
+                // Compare a renamed or moved file with its counterpart.
+                let otherURL = (item.left != nil ? model.target.right : model.target.left).appending(path: other)
+                openWindow(value: item.left != nil
+                    ? CompareTarget(left: left, right: otherURL, isFolder: false)
+                    : CompareTarget(left: otherURL, right: right, isFolder: false))
+                continue
+            }
             if item.isDirectory {
                 // A folder that exists on both sides opens its own folder comparison.
                 if item.left != nil, item.right != nil {
@@ -458,15 +583,16 @@ private struct ResultLabel: View {
 
     private var text: String {
         switch result {
-        case .identical: return "同一"
-        case .different(0): return "異なる（改行・文字コードのみ）"
-        case .different(let count?): return "異なる（\(count) 箇所）"
-        case .different: return "異なる"
-        case .leftOnly: return "左のみ"
-        case .rightOnly: return "右のみ"
-        case .binaryIdentical: return "バイナリ：同一"
-        case .binaryDifferent: return "バイナリ：異なる"
-        case .error(let message): return "エラー：\(message)"
+        case .identical: return L("Identical")
+        case .different(0): return L("Different (line endings or encoding only)")
+        case .different(let count?): return L("Different (\(count))")
+        case .different: return L("Different")
+        case .leftOnly: return L("Left only")
+        case .rightOnly: return L("Right only")
+        case .binaryIdentical: return L("Binary: identical")
+        case .binaryDifferent: return L("Binary: different")
+        case .error(let message): return L("Error: \(message)")
+        case .moved(let other): return L("Renamed or moved: \(other)")
         }
     }
 
@@ -477,6 +603,7 @@ private struct ResultLabel: View {
         case .leftOnly: return "arrow.left.circle.fill"
         case .rightOnly: return "arrow.right.circle.fill"
         case .error: return "xmark.octagon.fill"
+        case .moved: return "arrow.triangle.swap"
         }
     }
 
@@ -485,6 +612,7 @@ private struct ResultLabel: View {
         case .identical, .binaryIdentical: return .green
         case .different, .binaryDifferent: return .orange
         case .leftOnly, .rightOnly: return .gray
+        case .moved: return .blue
         case .error: return .red
         }
     }
@@ -498,5 +626,20 @@ extension FocusedValues {
     var folderCompare: FolderCompareModel? {
         get { self[FolderCompareKey.self] }
         set { self[FolderCompareKey.self] = newValue }
+    }
+}
+
+/// Which folder-compare columns are shown, in what order and width; kept between launches.
+enum FolderColumns {
+    private static let key = "folder.columns"
+
+    static func load() -> TableColumnCustomization<FolderItem> {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let value = try? JSONDecoder().decode(TableColumnCustomization<FolderItem>.self, from: data) else { return .init() }
+        return value
+    }
+
+    static func save(_ value: TableColumnCustomization<FolderItem>) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(value), forKey: key)
     }
 }
