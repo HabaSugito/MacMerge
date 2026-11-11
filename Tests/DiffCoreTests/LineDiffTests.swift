@@ -413,3 +413,21 @@ final class RenameDetectionTests: XCTestCase {
         XCTAssertEqual(byName["gone.txt"]?.result, .leftOnly)
     }
 }
+
+final class NonRecursiveTests: XCTestCase {
+    func testSubfoldersCanBeSkipped() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        for side in ["L", "R"] {
+            try fm.createDirectory(at: root.appendingPathComponent("\(side)/sub"), withIntermediateDirectories: true)
+            try side.write(to: root.appendingPathComponent("\(side)/sub/x.txt"), atomically: true, encoding: .utf8)
+        }
+        var comparer = FolderComparer()
+        comparer.recursive = false
+        let items = comparer.compare(left: root.appendingPathComponent("L"), right: root.appendingPathComponent("R"))
+        XCTAssertEqual(items.first?.result, .notCompared)
+        XCTAssertNil(items.first?.children)
+        XCTAssertEqual(FolderComparer().compare(left: root.appendingPathComponent("L"), right: root.appendingPathComponent("R")).first?.result, .different(diffCount: nil))
+    }
+}

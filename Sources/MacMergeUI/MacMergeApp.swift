@@ -64,24 +64,11 @@ struct MacMergeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("MacMerge", id: "open") {
-            OpenView()
-        }
-        .windowResizability(.contentSize)
-
-        WindowGroup("Compare", for: CompareTarget.self) { $target in
-            if let target {
-                Group {
-                    if target.isFolder {
-                        FolderCompareView(target: target)
-                    } else {
-                        FileCompareView(target: target)
-                    }
-                }
-                .frame(minWidth: 700, minHeight: 400)
-            } else {
-                OpenView(closesAfterCompare: true)
-            }
+        // Like WinMerge, everything lives in tabs of one window: a new tab shows the
+        // open form, and comparing turns that tab into the comparison.
+        WindowGroup("MacMerge", id: WindowSettings.groupID, for: CompareTarget.self) { $target in
+            MainContent(target: $target)
+                .background(WindowConfigurator())
         }
         .defaultSize(width: 1200, height: 800)
         .commands {
@@ -95,11 +82,62 @@ struct MacMergeApp: App {
     }
 }
 
+/// The content of one tab: the open form until something is compared, then the comparison.
+struct MainContent: View {
+    @Binding var target: CompareTarget?
+
+    var body: some View {
+        if let target {
+            Group {
+                if target.isFolder {
+                    FolderCompareView(target: target)
+                } else {
+                    FileCompareView(target: target)
+                }
+            }
+            .id(target)
+            .frame(minWidth: 700, minHeight: 400)
+        } else {
+            OpenView(target: $target)
+                .frame(minWidth: 600, minHeight: 400)
+        }
+    }
+}
+
+/// Whether comparisons open as tabs of one window (the default, like WinMerge) or in separate windows.
+enum WindowSettings {
+    static let groupID = "main"
+    static let tabsKey = "window.openInTabs"
+
+    static var opensInTabs: Bool { UserDefaults.standard.flag(tabsKey, default: true) }
+
+    /// macOS's own per-app preference for tabs ("Prefer tabs when opening documents").
+    static func applySystemPreference() {
+        UserDefaults.standard.set(opensInTabs ? "always" : "manual", forKey: "AppleWindowTabbingMode")
+    }
+}
+
+/// Puts each window into the shared tab group, or keeps it on its own, following the setting.
+private struct WindowConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { WindowHook() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class WindowHook: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.tabbingIdentifier = "MacMerge"
+            window.tabbingMode = WindowSettings.opensInTabs ? .preferred : .disallowed
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Do not restore the last session's windows. Restoring a session that ended with
         // no windows open would start the app with nothing on screen.
         UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+        WindowSettings.applySystemPreference()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -119,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let prefix = ProcessInfo.processInfo.environment["MACMERGE_SNAPSHOT"] else { return }
         let delay = Double(ProcessInfo.processInfo.environment["MACMERGE_SNAPSHOT_DELAY"] ?? "") ?? 3
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            let titles = NSApp.windows.map { "\($0.title) (visible: \($0.isVisible))" }
+            let titles = NSApp.windows.map { "\($0.title) (visible: \($0.isVisible), tabs: \($0.tabbedWindows?.count ?? 1))" }
             FileHandle.standardError.write(Data("snapshot: windows \(titles)\n".utf8))
             for (i, window) in NSApp.windows.enumerated() where window.isVisible {
                 guard let view = window.contentView?.superview ?? window.contentView,

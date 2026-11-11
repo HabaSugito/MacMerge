@@ -80,6 +80,9 @@ struct SettingsView: View {
             Section("Language") {
                 LanguagePicker()
             }
+            Section("Windows") {
+                TabsToggle()
+            }
             Section("Compare") {
                 CompareOptionControls()
                 FolderOptionControls()
@@ -173,5 +176,17 @@ enum LanguageSetting: String {
         process.arguments = ["-n", Bundle.main.bundlePath]
         try? process.run()
         NSApp.terminate(nil)
+    }
+}
+
+private struct TabsToggle: View {
+    @AppStorage(WindowSettings.tabsKey) private var opensInTabs = true
+
+    var body: some View {
+        Toggle("Open comparisons as tabs in one window", isOn: $opensInTabs)
+            .onChange(of: opensInTabs) { _, _ in WindowSettings.applySystemPreference() }
+        Text("Turn this off to open each comparison in its own window.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 }

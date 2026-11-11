@@ -217,6 +217,28 @@ final class FileCompareTests: XCTestCase {
         XCTAssertEqual(c.hunks.count, 1)
     }
 
+    func testRightClickPicksTheDifferenceUnderTheMouse() throws {
+        let c = try twoWay("a\nb\nc\nd\n", "a\nB\nc\nD\n")
+        c.focusDifference(pane: 1, characterIndex: c.lineStart(pane: 1, line: 3)!)
+        XCTAssertEqual(c.currentHunk, 1)
+        XCTAssertEqual(c.activePane, 1)
+    }
+
+    func testReadOnlyFromOpenScreen() throws {
+        var target = CompareTarget(left: try file("l.txt", "a\n"), right: try file("r.txt", "b\n"), kind: .files)
+        target.readOnlyRight = true
+        let c = open(target)
+        XCTAssertFalse(c.panes[1].textView.isEditable)
+        XCTAssertTrue(c.panes[0].textView.isEditable)
+    }
+
+    func testDiffPaneShowsCurrentLines() throws {
+        let c = try twoWay("x = 1\n", "x = 2\n")
+        let lines = c.diffPaneLines()
+        XCTAssertEqual(lines.map(\.text), ["x = 1", "x = 2"])
+        XCTAssertFalse(lines[0].ranges.isEmpty)
+    }
+
     func testPatchAndReport() throws {
         let c = try twoWay("a\nb\n", "a\nc\n")
         XCTAssertTrue(c.makePatch().contains("-b\n+c\n"))

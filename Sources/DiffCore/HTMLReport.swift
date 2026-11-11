@@ -110,6 +110,7 @@ public enum HTMLReport {
         case .binaryDifferent: return (L("Binary: different"), "different")
         case .error(let m): return (L("Error: \(m)"), "error")
         case .moved(let other): return (L("Renamed or moved: \(other)"), "different")
+        case .notCompared: return (L("Not compared"), "only")
         }
     }
 }

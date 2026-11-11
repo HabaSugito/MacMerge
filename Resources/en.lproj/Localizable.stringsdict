@@ -141,5 +141,17 @@
     <key>a</key><dict><key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string><key>NSStringFormatValueTypeKey</key><string>lld</string><key>one</key><string>Merged %lld difference automatically.</string><key>other</key><string>Merged %lld differences automatically.</string></dict>
     <key>b</key><dict><key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string><key>NSStringFormatValueTypeKey</key><string>lld</string><key>one</key><string>%lld conflict remains.</string><key>other</key><string>%lld conflicts remain.</string></dict>
   </dict>
+  <key>%lld items selected</key>
+  <dict>
+    <key>NSStringLocalizedFormatKey</key>
+    <string>%#@n@</string>
+    <key>n</key>
+    <dict>
+      <key>NSStringFormatSpecTypeKey</key><string>NSStringPluralRuleType</string>
+      <key>NSStringFormatValueTypeKey</key><string>lld</string>
+      <key>one</key><string>%lld item selected</string>
+      <key>other</key><string>%lld items selected</string>
+    </dict>
+  </dict>
 </dict>
 </plist>

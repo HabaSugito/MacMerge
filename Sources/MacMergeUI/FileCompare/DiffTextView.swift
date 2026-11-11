@@ -10,6 +10,46 @@ final class DiffTextView: NSTextView {
     weak var controller: FileCompareController?
     var paneIndex = 0
 
+    /// The right-click menu starts with WinMerge's merge commands for the difference under the mouse.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        guard let c = controller else { return menu }
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        c.focusDifference(pane: paneIndex, characterIndex: index)
+
+        let three = c.isThreeWay
+        let onDifference = c.currentHunk != nil
+        func item(_ title: String, _ action: Selector, enabled: Bool = true) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: enabled ? action : nil, keyEquivalent: "")
+            item.target = self
+            return item
+        }
+        let items = [
+            item(three ? L("Take Left into Middle") : L("Copy to Right"), #selector(menuCopyRight), enabled: onDifference),
+            item(three ? L("Take Right into Middle") : L("Copy to Left"), #selector(menuCopyLeft), enabled: onDifference),
+            item(L("Copy All to Right"), #selector(menuCopyAllRight), enabled: !c.hunks.isEmpty),
+            item(L("Copy All to Left"), #selector(menuCopyAllLeft), enabled: !c.hunks.isEmpty),
+            .separator(),
+            item(L("Next Difference"), #selector(menuNext)),
+            item(L("Previous Difference"), #selector(menuPrevious)),
+            .separator(),
+            item(L("Toggle Bookmark"), #selector(menuBookmark)),
+            item(L("Add Synchronization Point"), #selector(menuSync), enabled: !three),
+            .separator(),
+        ]
+        for (i, entry) in items.enumerated() { menu.insertItem(entry, at: i) }
+        return menu
+    }
+
+    @objc private func menuCopyRight() { controller?.copyRightward() }
+    @objc private func menuCopyLeft() { controller?.copyLeftward() }
+    @objc private func menuCopyAllRight() { controller.map { $0.copyAll(from: $0.rightwardPanes.from, to: $0.rightwardPanes.to) } }
+    @objc private func menuCopyAllLeft() { controller.map { $0.copyAll(from: $0.leftwardPanes.from, to: $0.leftwardPanes.to) } }
+    @objc private func menuNext() { controller?.nextDifference() }
+    @objc private func menuPrevious() { controller?.previousDifference() }
+    @objc private func menuBookmark() { controller?.toggleBookmark() }
+    @objc private func menuSync() { controller?.addSyncPoint() }
+
     /// In merge mode (F9) the plain arrow keys move between differences and copy them.
     override func keyDown(with event: NSEvent) {
         if let c = controller, c.mergeMode,

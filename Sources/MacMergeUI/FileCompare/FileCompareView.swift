@@ -16,12 +16,20 @@ struct FileCompareView: View {
             } else if controller.isBinary {
                 binaryNotice
             } else {
-                HStack(spacing: 0) {
-                    LocationPane(controller: controller)
-                        .frame(width: controller.isThreeWay ? 48 : 34)
-                    Divider()
-                    HSplitView {
-                        ForEach(0..<controller.paneCount, id: \.self) { paneColumn($0) }
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        LocationPane(controller: controller)
+                            .frame(width: controller.isThreeWay ? 48 : 34)
+                        Divider()
+                        HSplitView {
+                            ForEach(0..<controller.paneCount, id: \.self) { paneColumn($0) }
+                        }
+                    }
+                    .frame(minHeight: 200)
+                    if controller.showsDiffPane {
+                        Divider()
+                        DiffPaneView(controller: controller)
+                            .frame(height: CGFloat(controller.paneCount) * (controller.font.pointSize + 9) + 18)
                     }
                 }
             }
@@ -29,7 +37,8 @@ struct FileCompareView: View {
             StatusBar(controller: controller)
         }
         .navigationTitle(controller.target.title)
-        .toolbar { toolbar }
+        .toolbar(id: "fileCompare") { toolbar }
+        .toolbarRole(.editor)
         .focusedSceneValue(\.fileCompare, controller)
         .onAppear { RecentComparisons.shared.add(controller.target) }
     }
@@ -39,6 +48,8 @@ struct FileCompareView: View {
             PathHeader(info: controller.info[index], role: role(index))
             Divider()
             PaneView(pane: controller.pane(index), controller: controller)
+            Divider()
+            PaneStatusBar(controller: controller, pane: index)
         }
         .frame(minWidth: 180)
     }
@@ -60,39 +71,116 @@ struct FileCompareView: View {
         }
     }
 
+    /// The toolbar, laid out like WinMerge's. Right-click it to choose which buttons to show.
     @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItemGroup {
+    private var toolbar: some CustomizableToolbarContent {
+        editingItems
+        navigationItems
+        mergeItems
+        otherItems
+    }
+
+    @ToolbarContentBuilder
+    private var editingItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "save") {
+            Button { controller.saveAll() } label: { Label("Save", systemImage: "square.and.arrow.down") }
+                .help("Save (⌘S)")
+                .disabled(!controller.isDirty)
+        }
+        ToolbarItem(id: "undo") {
+            Button { NSApp.sendAction(Selector(("undo:")), to: nil, from: nil) } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
+                .help("Undo (⌘Z)")
+        }
+        ToolbarItem(id: "redo") {
+            Button { NSApp.sendAction(Selector(("redo:")), to: nil, from: nil) } label: { Label("Redo", systemImage: "arrow.uturn.forward") }
+                .help("Redo (⇧⌘Z)")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var navigationItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "first") {
+            Button { controller.firstDifference() } label: { Label("First Difference", systemImage: "arrow.up.to.line") }
+                .help("First difference (⌥Home)")
+        }
+        ToolbarItem(id: "previous") {
             Button { controller.previousDifference() } label: { Label("Previous Difference", systemImage: "chevron.up") }
                 .help("Previous difference (⌥↑)")
+        }
+        ToolbarItem(id: "current", showsByDefault: false) {
+            Button { controller.currentDifference() } label: { Label("Current Difference", systemImage: "scope") }
+                .help("Current difference (⌥↩)")
+        }
+        ToolbarItem(id: "next") {
             Button { controller.nextDifference() } label: { Label("Next Difference", systemImage: "chevron.down") }
                 .help("Next difference (⌥↓)")
         }
-        if controller.isThreeWay {
-            ToolbarItemGroup {
-                Button { controller.copyRightward() } label: { Label("Take Left", systemImage: "arrow.right.square") }
-                    .help("Take the left change into the middle (⌥→)")
-                    .disabled(controller.currentHunk == nil)
-                Button { controller.copyLeftward() } label: { Label("Take Right", systemImage: "arrow.left.square") }
-                    .help("Take the right change into the middle (⌥←)")
-                    .disabled(controller.currentHunk == nil)
-                Button { controller.autoMerge() } label: { Label("Auto Merge", systemImage: "wand.and.stars") }
-                    .help("Take every one-sided change into the middle (⌃⌥M)")
-            }
-        } else {
-            ToolbarItemGroup {
-                Button { controller.copyLeftward() } label: { Label("Copy to Left", systemImage: "arrow.left.square") }
-                    .help("Copy the right difference to the left (⌥←)")
-                    .disabled(controller.currentHunk == nil)
-                Button { controller.copyRightward() } label: { Label("Copy to Right", systemImage: "arrow.right.square") }
-                    .help("Copy the left difference to the right (⌥→)")
-                    .disabled(controller.currentHunk == nil)
-            }
+        ToolbarItem(id: "last") {
+            Button { controller.lastDifference() } label: { Label("Last Difference", systemImage: "arrow.down.to.line") }
+                .help("Last difference (⌥End)")
         }
-        ToolbarItem {
+    }
+
+    @ToolbarContentBuilder
+    private var mergeItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "copyLeft") {
+            Button { controller.copyLeftward() } label: {
+                Label(controller.isThreeWay ? "Take Right" : "Copy to Left", systemImage: "arrow.left.square")
+            }
+            .help(controller.isThreeWay ? "Take the right change into the middle (⌥←)" : "Copy the right difference to the left (⌥←)")
+            .disabled(controller.currentHunk == nil)
+        }
+        ToolbarItem(id: "copyRight") {
+            Button { controller.copyRightward() } label: {
+                Label(controller.isThreeWay ? "Take Left" : "Copy to Right", systemImage: "arrow.right.square")
+            }
+            .help(controller.isThreeWay ? "Take the left change into the middle (⌥→)" : "Copy the left difference to the right (⌥→)")
+            .disabled(controller.currentHunk == nil)
+        }
+        ToolbarItem(id: "copyLeftAdvance", showsByDefault: false) {
+            Button { controller.copyLeftward(advance: true) } label: { Label("Copy to Left and Advance", systemImage: "arrow.left.to.line.square") }
+                .help("Copy and go to the next difference (⌃⌥←)")
+        }
+        ToolbarItem(id: "copyRightAdvance", showsByDefault: false) {
+            Button { controller.copyRightward(advance: true) } label: { Label("Copy to Right and Advance", systemImage: "arrow.right.to.line.square") }
+                .help("Copy and go to the next difference (⌃⌥→)")
+        }
+        ToolbarItem(id: "copyAllLeft") {
+            Button { controller.copyAll(from: controller.leftwardPanes.from, to: controller.leftwardPanes.to) } label: {
+                Label("Copy All to Left", systemImage: "rectangle.lefthalf.inset.filled.arrow.left")
+            }
+            .help("Copy every difference to the left")
+            .disabled(controller.hunks.isEmpty)
+        }
+        ToolbarItem(id: "copyAllRight") {
+            Button { controller.copyAll(from: controller.rightwardPanes.from, to: controller.rightwardPanes.to) } label: {
+                Label("Copy All to Right", systemImage: "rectangle.righthalf.inset.filled.arrow.right")
+            }
+            .help("Copy every difference to the right")
+            .disabled(controller.hunks.isEmpty)
+        }
+        ToolbarItem(id: "autoMerge") {
+            Button { controller.autoMerge() } label: { Label("Auto Merge", systemImage: "wand.and.stars") }
+                .help("Take every one-sided change into the middle (⌃⌥M)")
+                .disabled(!controller.isThreeWay)
+        }
+        ToolbarItem(id: "nextConflict", showsByDefault: false) {
+            Button { controller.nextDifference(conflictsOnly: true) } label: { Label("Next Conflict", systemImage: "exclamationmark.triangle") }
+                .help("Next conflict (⌥⇧↓)")
+                .disabled(!controller.isThreeWay)
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var otherItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "refresh") {
+            Button { controller.reload() } label: { Label("Reload", systemImage: "arrow.clockwise") }
+                .help("Reload the files and compare again (F5)")
+        }
+        ToolbarItem(id: "options") {
             CompareOptionsMenu()
         }
-        ToolbarItem {
+        ToolbarItem(id: "export") {
             Menu {
                 Button("Create HTML Report…") { Exporter.saveReport(controller.makeReport()) }
                 if !controller.isThreeWay {
@@ -102,13 +190,6 @@ struct FileCompareView: View {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
             .help("Export a report or a patch")
-        }
-        ToolbarItemGroup {
-            Button { controller.saveAll() } label: { Label("Save", systemImage: "square.and.arrow.down") }
-                .help("Save (⌘S)")
-                .disabled(!controller.isDirty)
-            Button { controller.reload() } label: { Label("Reload", systemImage: "arrow.clockwise") }
-                .help("Reload the files and compare again (⌘R)")
         }
     }
 }
@@ -214,9 +295,6 @@ private struct StatusBar: View {
                 Text(message).lineLimit(1)
             }
             Spacer()
-            ForEach(0..<controller.paneCount, id: \.self) { p in
-                fileInfo(controller.info[p], label: labels[p])
-            }
         }
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -250,5 +328,71 @@ extension FocusedValues {
     var fileCompare: FileCompareController? {
         get { self[FileCompareKey.self] }
         set { self[FileCompareKey.self] = newValue }
+    }
+}
+
+/// WinMerge's per-pane status bar: caret position, encoding, line endings and read-only state.
+private struct PaneStatusBar: View {
+    @ObservedObject var controller: FileCompareController
+    let pane: Int
+
+    var body: some View {
+        let info = controller.info[pane]
+        let caret: (line: Int, column: Int) = controller.caret.indices.contains(pane) ? controller.caret[pane] : (1, 1)
+        HStack(spacing: 12) {
+            Text("Ln \(caret.line), Col \(caret.column)").monospacedDigit()
+            Spacer(minLength: 0)
+            if info.isReadOnly { Text("Read Only") }
+            Text(verbatim: info.file.encodingName)
+            Text(verbatim: info.file.lineEnding.rawValue)
+        }
+        .font(.caption)
+        .foregroundStyle(pane == controller.activePane ? .primary : .secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(.bar)
+    }
+}
+
+/// WinMerge's diff pane: the current line of each pane, one above the other, so long lines
+/// can be compared character by character.
+private struct DiffPaneView: View {
+    @ObservedObject var controller: FileCompareController
+
+    var body: some View {
+        let lines = controller.diffPaneLines()
+        let labels: [LocalizedStringKey] = controller.isThreeWay ? ["Left", "Middle", "Right"] : ["Left", "Right"]
+        ScrollView(.horizontal) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
+                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                    GridRow {
+                        Text(labels[min(index, labels.count - 1)])
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if let text = line.text {
+                            Text(highlighted(text, line.ranges))
+                                .font(.system(size: controller.font.pointSize, design: .monospaced))
+                                .textSelection(.enabled)
+                                .fixedSize()
+                        } else {
+                            Text("(no line)").font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private func highlighted(_ text: String, _ ranges: [NSRange]) -> AttributedString {
+        let attributed = NSMutableAttributedString(string: text.replacingOccurrences(of: "\t", with: "    "))
+        let length = (text as NSString).length
+        for range in ranges where NSMaxRange(range) <= length {
+            attributed.addAttribute(.backgroundColor, value: DiffColors.selectedWord, range: range)
+        }
+        return (try? AttributedString(attributed, including: \.appKit)) ?? AttributedString(text)
     }
 }

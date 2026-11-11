@@ -69,7 +69,8 @@ final class FolderCompareModel: ObservableObject {
         isComparing = true
         progress = 0
         let left = target.left, right = target.right
-        let comparer = FolderComparer(options: options, filter: FileFilter(filterText), detectRenames: detectRenames)
+        var comparer = FolderComparer(options: options, filter: FileFilter(filterText), detectRenames: detectRenames)
+        comparer.recursive = target.includeSubfolders
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> [FolderItem] in
                 comparer.compare(left: left, right: right, progress: { count in
@@ -111,7 +112,7 @@ final class FolderCompareModel: ObservableObject {
 
     private func isShown(_ item: FolderItem) -> Bool {
         switch item.result {
-        case .identical, .binaryIdentical: return showIdentical
+        case .identical, .binaryIdentical, .notCompared: return showIdentical
         case .leftOnly: return showLeftOnly
         case .rightOnly: return showRightOnly
         default: return showDifferent
@@ -174,7 +175,7 @@ final class FolderCompareModel: ObservableObject {
                     continue
                 }
                 switch item.result {
-                case .identical, .binaryIdentical: c.0 += 1
+                case .identical, .binaryIdentical, .notCompared: c.0 += 1
                 case .leftOnly: c.2 += 1
                 case .rightOnly: c.3 += 1
                 default: c.1 += 1
@@ -338,7 +339,7 @@ extension FolderItem {
         case .rightOnly: return 2
         case .error: return 3
         case .moved: return 1
-        case .identical, .binaryIdentical: return 4
+        case .identical, .binaryIdentical, .notCompared: return 4
         }
     }
     var folderPath: String { (id.replacingOccurrences(of: "\u{0}r", with: "") as NSString).deletingLastPathComponent }
@@ -371,9 +372,16 @@ struct FolderCompareView: View {
             statusBar
         }
         .navigationTitle(model.target.title)
-        .toolbar { toolbar }
+        .toolbar(id: "folderCompare") { toolbar }
+        .toolbarRole(.editor)
         .focusedSceneValue(\.folderCompare, model)
         .onAppear { RecentComparisons.shared.add(model.target) }
+        .onChange(of: model.isComparing) { _, comparing in
+            // For development: MACMERGE_DEBUG_OPEN_FIRST=1 opens the first different file, like a double-click.
+            guard !comparing, ProcessInfo.processInfo.environment["MACMERGE_DEBUG_OPEN_FIRST"] != nil,
+                  let first = model.visibleItems.first(where: { !$0.isDirectory && $0.result.isDifferent && $0.left != nil && $0.right != nil }) else { return }
+            open([first.id])
+        }
     }
 
     private var table: some View {
@@ -407,9 +415,11 @@ struct FolderCompareView: View {
             TableColumn("Left Size", value: \.leftSize) { item in Text(size(item.left, item.isDirectory)).monospacedDigit() }
                 .width(min: 60, ideal: 80)
                 .customizationID("leftSize")
+                .defaultVisibility(.hidden)
             TableColumn("Right Size", value: \.rightSize) { item in Text(size(item.right, item.isDirectory)).monospacedDigit() }
                 .width(min: 60, ideal: 80)
                 .customizationID("rightSize")
+                .defaultVisibility(.hidden)
             TableColumn("Extension", value: \.fileExtension) { item in Text(item.fileExtension) }
                 .width(min: 40, ideal: 60)
                 .customizationID("extension")
@@ -473,6 +483,9 @@ struct FolderCompareView: View {
             Text("Left only \(c.leftOnly)")
             Text("Right only \(c.rightOnly)")
             Spacer()
+            if !model.selection.isEmpty {
+                Text("\(model.selection.count) items selected")
+            }
             if !model.filterText.isEmpty {
                 Text("Filter: \(model.filterText)").lineLimit(1)
             }
@@ -484,40 +497,68 @@ struct FolderCompareView: View {
         .padding(.vertical, 4)
     }
 
+    /// The toolbar, laid out like WinMerge's folder window. Right-click it to choose which buttons to show.
     @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem {
-            TextField("Filter (e.g. *.swift;!build/)", text: $model.filterText)
-                .frame(width: 220)
-                .onSubmit { model.applyFilter() }
-                .help("Which files to compare. Separate patterns with ;, put ! in front to exclude, and end a pattern with / for folders. Press Return to apply.")
+    private var toolbar: some CustomizableToolbarContent {
+        actionItems
+        viewItems
+    }
+
+    @ToolbarContentBuilder
+    private var actionItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "compare") {
+            Button { open(model.selection) } label: { Label("Compare", systemImage: "doc.on.doc") }
+                .help("Compare the selected items (↩)")
+                .disabled(model.selection.isEmpty)
         }
-        ToolbarItemGroup {
-            Toggle(isOn: $model.showIdentical) { Label("Identical", systemImage: "equal.circle") }
-                .help("Show identical items")
-            Toggle(isOn: $model.showDifferent) { Label("Different", systemImage: "exclamationmark.circle") }
-                .help("Show different items")
-            Toggle(isOn: $model.showLeftOnly) { Label("Left only", systemImage: "arrow.left.circle") }
-                .help("Show items only on the left")
-            Toggle(isOn: $model.showRightOnly) { Label("Right only", systemImage: "arrow.right.circle") }
-                .help("Show items only on the right")
-        }
-        ToolbarItemGroup {
+        ToolbarItem(id: "copyLeft") {
             Button { model.copySelected(toRight: false) } label: { Label("Copy to Left", systemImage: "arrow.left.square") }
                 .help("Copy the selected items to the left (⌥←)")
                 .disabled(model.copyable(toRight: false).isEmpty)
+        }
+        ToolbarItem(id: "copyRight") {
             Button { model.copySelected(toRight: true) } label: { Label("Copy to Right", systemImage: "arrow.right.square") }
                 .help("Copy the selected items to the right (⌥→)")
                 .disabled(model.copyable(toRight: true).isEmpty)
+        }
+        ToolbarItem(id: "trash") {
             Button { model.deleteSelected() } label: { Label("Move to Trash", systemImage: "trash") }
                 .help("Move the selected items to the Trash (⌘⌫)")
                 .disabled(!model.canDelete)
         }
-        ToolbarItem {
+        ToolbarItem(id: "refresh") {
+            Button { model.compare() } label: { Label("Compare Again", systemImage: "arrow.clockwise") }
+                .help("Compare again (F5)")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var viewItems: some CustomizableToolbarContent {
+        ToolbarItem(id: "filter") {
+            TextField("Filter (e.g. *.swift;!build/)", text: $model.filterText)
+                .frame(width: 200)
+                .onSubmit { model.applyFilter() }
+                .help("Which files to compare. Separate patterns with ;, put ! in front to exclude, and end a pattern with / for folders. Press Return to apply.")
+        }
+        ToolbarItem(id: "show") {
+            ControlGroup {
+                Toggle(isOn: $model.showIdentical) { Label("Identical", systemImage: "equal.circle") }
+                    .help("Show identical items")
+                Toggle(isOn: $model.showDifferent) { Label("Different", systemImage: "exclamationmark.circle") }
+                    .help("Show different items")
+                Toggle(isOn: $model.showLeftOnly) { Label("Left only", systemImage: "arrow.left.circle") }
+                    .help("Show items only on the left")
+                Toggle(isOn: $model.showRightOnly) { Label("Right only", systemImage: "arrow.right.circle") }
+                    .help("Show items only on the right")
+            } label: {
+                Label("Show", systemImage: "eye")
+            }
+        }
+        ToolbarItem(id: "tree") {
             Toggle(isOn: $model.treeMode) { Label("Tree View", systemImage: "list.bullet.indent") }
                 .help("Show folders as a tree, or every file in one flat list")
         }
-        ToolbarItem {
+        ToolbarItem(id: "options") {
             Menu {
                 CompareOptionControls()
                 Divider()
@@ -528,9 +569,14 @@ struct FolderCompareView: View {
             }
             .help("Compare Options")
         }
-        ToolbarItem {
-            Button { model.compare() } label: { Label("Compare Again", systemImage: "arrow.clockwise") }
-                .help("Compare again (⌘R)")
+        ToolbarItem(id: "export", showsByDefault: false) {
+            Menu {
+                Button("Create HTML Report…") { Exporter.saveReport(model.makeReport()) }
+                Button("Create Patch…") { Exporter.savePatch(model.makePatch()) }
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .help("Export a report or a patch")
         }
     }
 
@@ -594,6 +640,7 @@ private struct ResultLabel: View {
         case .binaryDifferent: return L("Binary: different")
         case .error(let message): return L("Error: \(message)")
         case .moved(let other): return L("Renamed or moved: \(other)")
+        case .notCompared: return L("Not compared")
         }
     }
 
@@ -605,6 +652,7 @@ private struct ResultLabel: View {
         case .rightOnly: return "arrow.right.circle.fill"
         case .error: return "xmark.octagon.fill"
         case .moved: return "arrow.triangle.swap"
+        case .notCompared: return "minus.circle"
         }
     }
 
@@ -614,6 +662,7 @@ private struct ResultLabel: View {
         case .different, .binaryDifferent: return .orange
         case .leftOnly, .rightOnly: return .gray
         case .moved: return .blue
+        case .notCompared: return .secondary
         case .error: return .red
         }
     }
@@ -632,7 +681,7 @@ extension FocusedValues {
 
 /// Which folder-compare columns are shown, in what order and width; kept between launches.
 enum FolderColumns {
-    private static let key = "folder.columns"
+    private static let key = "folder.columns.v2"
 
     static func load() -> TableColumnCustomization<FolderItem> {
         guard let data = UserDefaults.standard.data(forKey: key),

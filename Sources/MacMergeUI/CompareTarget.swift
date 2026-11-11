@@ -16,6 +16,12 @@ struct CompareTarget: Codable, Hashable {
     /// Three-way compare: where the merged middle pane is saved (e.g. git mergetool's MERGED).
     var output: URL?
     var kind: Kind
+    /// Panes opened read-only, chosen in the open screen.
+    var readOnlyLeft = false
+    var readOnlyMiddle = false
+    var readOnlyRight = false
+    /// Folder comparisons: look into subfolders.
+    var includeSubfolders = true
 
     init(left: URL, right: URL, middle: URL? = nil, output: URL? = nil, kind: Kind) {
         self.left = left
@@ -23,6 +29,24 @@ struct CompareTarget: Codable, Hashable {
         self.middle = middle
         self.output = output
         self.kind = kind
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case left, right, middle, output, kind, readOnlyLeft, readOnlyMiddle, readOnlyRight, includeSubfolders
+    }
+
+    /// Reads targets saved by older versions too, which lack the newer fields.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        left = try c.decode(URL.self, forKey: .left)
+        right = try c.decode(URL.self, forKey: .right)
+        middle = try c.decodeIfPresent(URL.self, forKey: .middle)
+        output = try c.decodeIfPresent(URL.self, forKey: .output)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        readOnlyLeft = try c.decodeIfPresent(Bool.self, forKey: .readOnlyLeft) ?? false
+        readOnlyMiddle = try c.decodeIfPresent(Bool.self, forKey: .readOnlyMiddle) ?? false
+        readOnlyRight = try c.decodeIfPresent(Bool.self, forKey: .readOnlyRight) ?? false
+        includeSubfolders = try c.decodeIfPresent(Bool.self, forKey: .includeSubfolders) ?? true
     }
 
     init(left: URL, right: URL, isFolder: Bool) {

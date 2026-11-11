@@ -44,6 +44,12 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             refreshLayout(syntax: false)
         }
     }
+    /// Caret position (1-based line and column) in each pane, for the pane status bars.
+    @Published private(set) var caret: [(line: Int, column: Int)] = []
+    /// The panel under the panes that shows the current line of every pane, one above the other.
+    @Published var showsDiffPane = UserDefaults.standard.flag("view.diffPane", default: true) {
+        didSet { UserDefaults.standard.set(showsDiffPane, forKey: "view.diffPane") }
+    }
     /// Merge mode (F9): plain arrow keys move between differences and copy them.
     @Published var mergeMode = false
     @Published var showsInlineDifferences = true {
@@ -85,7 +91,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     private var pendingRecompute: DispatchWorkItem?
     private var isSyncingScroll = false
     private var isMovingCaret = false
-    private(set) var activePane = 0
+    @Published private(set) var activePane = 0
     private var closeGuard: WindowCloseGuard?
     private var watchers: [FileWatcher] = []
     private(set) var options = CompareSettings.options
@@ -112,6 +118,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         lineToRow = Array(repeating: [], count: count)
         leadingHeight = Array(repeating: 0, count: count)
         info = Self.initialInfo(target)
+        caret = Array(repeating: (1, 1), count: count)
         super.init()
         highlighters = info.map { SyntaxHighlighter.forFile($0.url ?? target.left) }
         for pane in panes {
@@ -124,6 +131,9 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         }
         NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged), name: UserDefaults.didChangeNotification, object: nil)
         load()
+        if target.readOnlyLeft { setReadOnly(true, pane: 0) }
+        if target.readOnlyMiddle, count == 3 { setReadOnly(true, pane: 1) }
+        if target.readOnlyRight { setReadOnly(true, pane: count - 1) }
         if target.kind != .conflict {
             watchers = (0..<count).compactMap { p in
                 info[p].url.map { url in FileWatcher(url: url) { [weak self] in self?.fileChangedOnDisk(pane: p) } }
@@ -587,6 +597,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     // MARK: Selection and navigation
 
     func textViewDidChangeSelection(_ notification: Notification) {
+        if let tv = notification.object as? DiffTextView { updateCaret(pane: tv.paneIndex) }
         guard let tv = notification.object as? DiffTextView, !isMovingCaret, pendingRecompute == nil else { return }
         activePane = tv.paneIndex
         let row = caretRow(pane: tv.paneIndex)
@@ -598,6 +609,44 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
 
     func textDidBeginEditing(_ notification: Notification) {
         if let tv = notification.object as? DiffTextView { activePane = tv.paneIndex }
+    }
+
+    /// Makes the difference at a character position the current one (for the right-click menu).
+    func focusDifference(pane p: Int, characterIndex: Int) {
+        recomputeIfPending()
+        activePane = p
+        let starts = lineStarts[p]
+        guard !starts.isEmpty else { return }
+        var lo = 0, hi = starts.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if starts[mid] <= characterIndex { lo = mid } else { hi = mid - 1 }
+        }
+        guard lo < lineToRow[p].count else { return }
+        let row = lineToRow[p][lo]
+        if let hunk = rows[row].hunk, hunk != currentHunk {
+            currentHunk = hunk
+            redraw()
+        }
+    }
+
+    private func updateCaret(pane p: Int) {
+        guard caret.indices.contains(p), !lineStarts[p].isEmpty else { return }
+        let l = caretLine(pane: p)
+        let column = panes[p].textView.selectedRange().location - lineStarts[p][l] + 1
+        caret[p] = (l + 1, max(column, 1))
+        if p == activePane || panes[p].textView.window?.firstResponder === panes[p].textView { activePane = p }
+    }
+
+    /// The current line of every pane for the diff pane: its text and the parts that differ.
+    /// A nil text means the line does not exist on that side.
+    func diffPaneLines() -> [(text: String?, ranges: [NSRange])] {
+        guard !rows.isEmpty, lineStarts.indices.contains(activePane) else { return [] }
+        let r = min(caretRow(pane: activePane), rows.count - 1)
+        return (0..<paneCount).map { p in
+            guard let l = line(rows[r], pane: p), l < lines[p].count else { return (nil, []) }
+            return (lines[p][l], rows[r].hunk != nil ? inlineRanges(row: r, pane: p) : [])
+        }
     }
 
     private func caretRow(pane p: Int) -> Int {

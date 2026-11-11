@@ -80,6 +80,14 @@ final class OpenAndProjectTests: XCTestCase {
         XCTAssertThrowsError(try CompareRequest.target(left: folder, middle: folder, right: folder).get())
     }
 
+    func testOlderSavedTargetsStillLoad() throws {
+        let old = #"{"left":"file:///tmp/a","right":"file:///tmp/b","kind":"files"}"#
+        let target = try JSONDecoder().decode(CompareTarget.self, from: Data(old.utf8))
+        XCTAssertEqual(target.left.path, "/tmp/a")
+        XCTAssertFalse(target.readOnlyLeft)
+        XCTAssertTrue(target.includeSubfolders)
+    }
+
     func testProjectFileRoundTrip() throws {
         let target = CompareTarget(left: URL(filePath: "/tmp/a"), right: URL(filePath: "/tmp/b"), middle: URL(filePath: "/tmp/base"), output: URL(filePath: "/tmp/out"), kind: .files)
         let data = try JSONEncoder().encode(ProjectFile(target: target))

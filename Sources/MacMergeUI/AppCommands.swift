@@ -11,15 +11,17 @@ struct AppCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Comparison…") { openWindow(id: "open") }
+            Button("New Comparison…") { openWindow(id: WindowSettings.groupID) }
                 .keyboardShortcut("n")
+            Button("New Tab") { openWindow(id: WindowSettings.groupID) }
+                .keyboardShortcut("t")
             Button("Open Conflict File…") { openConflictFile() }
             Button("Compare Clipboard History") {
                 if let target = ClipboardHistory.shared.makeComparison() { openWindow(value: target) }
             }
             Menu("Open Recent") {
                 ForEach(recent.items, id: \.self) { target in
-                    Button(target.title) { openWindow(value: target) }
+                    Button { openWindow(value: target) } label: { Text(verbatim: target.title) }
                 }
                 Divider()
                 Button("Clear Menu") { recent.clear() }
@@ -109,6 +111,16 @@ struct AppCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
+            Button("Refresh") {
+                if let compare { compare.reload() } else { folder?.compare() }
+            }
+            .keyboardShortcut(Self.functionKey(NSF5FunctionKey), modifiers: [])
+            .disabled(compare == nil && folder == nil)
+            Divider()
+            Toggle("Diff Pane", isOn: Binding(
+                get: { compare?.showsDiffPane ?? false },
+                set: { compare?.showsDiffPane = $0 }))
+                .disabled(compare == nil)
             Toggle("Wrap Lines", isOn: Binding(
                 get: { compare?.wrapLines ?? false },
                 set: { compare?.wrapLines = $0 }))

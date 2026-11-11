@@ -1,29 +1,37 @@
 import AppKit
 import SwiftUI
 
-/// The "select files or folders" window, like WinMerge's Open dialog.
+/// The "select files or folders" tab, like WinMerge's Open view. Comparing turns this tab
+/// into the comparison.
 struct OpenView: View {
-    var closesAfterCompare = false
-    @Environment(\.dismiss) private var dismiss
+    @Binding var target: CompareTarget?
     @AppStorage("lastLeftPath") private var leftPath = ""
     @AppStorage("lastRightPath") private var rightPath = ""
     @AppStorage("lastMiddlePath") private var middlePath = ""
-    @AppStorage("showMiddlePath") private var showsMiddle = false
+    @AppStorage("open.readOnlyLeft") private var readOnlyLeft = false
+    @AppStorage("open.readOnlyMiddle") private var readOnlyMiddle = false
+    @AppStorage("open.readOnlyRight") private var readOnlyRight = false
+    @AppStorage("open.includeSubfolders") private var includeSubfolders = true
+    @AppStorage(CompareSettings.fileFilterKey) private var filter = ""
     @State private var error: String?
-    @Environment(\.openWindow) private var openWindow
     @ObservedObject private var recent = RecentComparisons.shared
+    @ObservedObject private var history = PathHistory.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Choose the files or folders to compare")
-                .font(.headline)
-            PathField(label: "Left", path: $leftPath)
-            if showsMiddle {
-                PathField(label: "Middle", path: $middlePath, placeholder: "Path of the base (common ancestor) file")
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Select Files or Folders")
+                .font(.title2.weight(.semibold))
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 10) {
+                pathRow("Left", $leftPath, readOnly: $readOnlyLeft)
+                pathRow("Middle", $middlePath, readOnly: $readOnlyMiddle, placeholder: "Optional: the base file for a 3-way comparison")
+                pathRow("Right", $rightPath, readOnly: $readOnlyRight)
+                GridRow {
+                    Text("Filter")
+                    ComboField(text: $filter, prompt: Text(verbatim: "*.*"), choices: FilterPresets.all)
+                    Toggle("Include Subfolders", isOn: $includeSubfolders)
+                        .gridCellColumns(2)
+                }
             }
-            PathField(label: "Right", path: $rightPath)
-            Toggle("3-way comparison (base file in the middle)", isOn: $showsMiddle)
-                .font(.callout)
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
@@ -32,100 +40,152 @@ struct OpenView: View {
             HStack {
                 Button {
                     swap(&leftPath, &rightPath)
+                    swap(&readOnlyLeft, &readOnlyRight)
                 } label: {
                     Label("Swap Left and Right", systemImage: "arrow.left.arrow.right")
                 }
                 Spacer()
                 Button("Compare") { compare() }
                     .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
                     .disabled(leftPath.isEmpty || rightPath.isEmpty)
             }
             if !recent.items.isEmpty {
-                Divider()
+                Divider().padding(.vertical, 4)
                 Text("Recent Comparisons").font(.headline)
                 VStack(alignment: .leading, spacing: 2) {
-                        ForEach(recent.items.prefix(8), id: \.self) { target in
-                            Button {
-                                openWindow(value: target)
-                                if closesAfterCompare { dismiss() }
-                            } label: {
-                                HStack {
-                                    Image(systemName: target.isFolder ? "folder" : (target.isThreeWay ? "square.split.3x1" : "doc.on.doc"))
-                                        .foregroundStyle(.secondary)
-                                    Text(target.title).lineLimit(1)
-                                    Spacer()
-                                    Text(target.left.deletingLastPathComponent().path(percentEncoded: false))
-                                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                                }
-                                .contentShape(Rectangle())
+                    ForEach(recent.items.prefix(10), id: \.self) { item in
+                        Button {
+                            target = item
+                        } label: {
+                            HStack {
+                                Image(systemName: item.isFolder ? "folder" : (item.isThreeWay ? "rectangle.split.3x1" : "doc.on.doc"))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 18)
+                                Text(item.title).lineLimit(1)
+                                Spacer()
+                                Text(item.left.deletingLastPathComponent().path(percentEncoded: false))
+                                    .foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                             }
-                            .buttonStyle(.plain)
-                            .padding(.vertical, 3)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .padding(.vertical, 3)
+                    }
                 }
             }
         }
-        .padding(20)
-        .frame(minWidth: 560)
+        .padding(24)
+        .frame(maxWidth: 820)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .navigationTitle("New Comparison")
         .onAppear(perform: openLaunchArguments)
+    }
+
+    private func pathRow(_ label: LocalizedStringKey, _ path: Binding<String>, readOnly: Binding<Bool>,
+                         placeholder: LocalizedStringKey = "Type a path or drag a file here") -> some View {
+        GridRow {
+            Text(label)
+            ComboField(text: path, prompt: Text(placeholder), choices: history.paths, acceptsDrops: true)
+            Button("Browse…") { browse(path) }
+            Toggle("Read Only", isOn: readOnly)
+        }
+    }
+
+    private func browse(_ path: Binding<String>) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if !path.wrappedValue.isEmpty { panel.directoryURL = URL(filePath: path.wrappedValue).deletingLastPathComponent() }
+        if panel.runModal() == .OK, let url = panel.url {
+            path.wrappedValue = url.path(percentEncoded: false)
+        }
     }
 
     /// Paths given on the command line open that comparison right away (for git difftool and mergetool).
     private func openLaunchArguments() {
         guard !LaunchArguments.consumed, let target = LaunchArguments.target else { return }
         LaunchArguments.consumed = true
-        openWindow(value: target)
-        if closesAfterCompare { dismiss() }
+        self.target = target
     }
-
 
     private func compare() {
-        switch CompareRequest.target(left: leftPath, middle: showsMiddle ? middlePath : "", right: rightPath) {
+        switch CompareRequest.target(left: leftPath, middle: middlePath, right: rightPath) {
         case .failure(let message):
             error = message.text
-        case .success(let target):
+        case .success(var newTarget):
             error = nil
-            openWindow(value: target)
-            if closesAfterCompare { dismiss() }
+            newTarget.readOnlyLeft = readOnlyLeft
+            newTarget.readOnlyMiddle = readOnlyMiddle
+            newTarget.readOnlyRight = readOnlyRight
+            newTarget.includeSubfolders = includeSubfolders
+            for path in [leftPath, middlePath, rightPath] where !path.isEmpty { history.add(path) }
+            target = newTarget
         }
-    }
-
-    private func expand(_ path: String) -> String {
-        (path.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
     }
 }
 
-private struct PathField: View {
-    let label: LocalizedStringKey
-    @Binding var path: String
-    var placeholder = "Type a path or drag a file here"
+/// A text field with a drop-down of earlier entries, like WinMerge's path combo boxes.
+private struct ComboField: View {
+    @Binding var text: String
+    var prompt: Text
+    var choices: [String]
+    var acceptsDrops = false
     @State private var isTargeted = false
 
     var body: some View {
-        HStack {
-            Text(label).frame(width: 52, alignment: .leading)
-            TextField(placeholder, text: $path)
+        HStack(spacing: 4) {
+            TextField(text: $text, prompt: prompt) { EmptyView() }
                 .textFieldStyle(.roundedBorder)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: isTargeted ? 2 : 0))
                 .dropDestination(for: URL.self) { urls, _ in
-                    guard let url = urls.first else { return false }
-                    path = url.path(percentEncoded: false)
+                    guard acceptsDrops, let url = urls.first else { return false }
+                    text = url.path(percentEncoded: false)
                     return true
-                } isTargeted: { isTargeted = $0 }
-            Button("Browse…") { browse() }
+                } isTargeted: { isTargeted = acceptsDrops && $0 }
+            Menu {
+                ForEach(choices, id: \.self) { choice in
+                    Button { text = choice } label: { Text(verbatim: choice) }
+                }
+                if choices.isEmpty { Text("No History") }
+            } label: {
+                Image(systemName: "chevron.down")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Recently used")
         }
+        .frame(minWidth: 360)
     }
+}
 
-    private func browse() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        if !path.isEmpty { panel.directoryURL = URL(filePath: path).deletingLastPathComponent() }
-        if panel.runModal() == .OK, let url = panel.url {
-            path = url.path(percentEncoded: false)
-        }
+/// Paths typed or chosen in the open screen, newest first.
+@MainActor
+final class PathHistory: ObservableObject {
+    static let shared = PathHistory()
+    private static let key = "open.pathHistory"
+    @Published private(set) var paths: [String] = UserDefaults.standard.stringArray(forKey: PathHistory.key) ?? []
+
+    func add(_ path: String) {
+        paths.removeAll { $0 == path }
+        paths.insert(path, at: 0)
+        if paths.count > 20 { paths.removeLast(paths.count - 20) }
+        UserDefaults.standard.set(paths, forKey: Self.key)
     }
+}
+
+/// Ready-made file masks for the filter field.
+enum FilterPresets {
+    static let all = [
+        "*.*",
+        "!.git/;!.svn/;!node_modules/;!build/;!.build/;!DerivedData/",
+        "*.swift;*.h;*.m;*.mm;*.c;*.cpp",
+        "*.js;*.ts;*.jsx;*.tsx;*.json;*.css;*.html",
+        "*.py;*.rb;*.go;*.rs;*.java;*.kt",
+        "*.txt;*.md;*.csv",
+    ]
 }
 
 /// Checks the paths typed in the open window and turns them into a comparison.

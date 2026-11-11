@@ -12,10 +12,12 @@ public enum CompareResult: Equatable {
     /// A file that exists on one side only, but with the same contents as a file at
     /// `counterpart` (a path relative to the other root): it was renamed or moved.
     case moved(counterpart: String)
+    /// A folder that exists on both sides but was not looked into (subfolders turned off).
+    case notCompared
 
     public var isDifferent: Bool {
         switch self {
-        case .identical, .binaryIdentical: return false
+        case .identical, .binaryIdentical, .notCompared: return false
         default: return true
         }
     }
@@ -50,6 +52,8 @@ public struct FolderComparer {
     public var filter: FileFilter
     /// Pair up files that exist on one side only but have identical contents.
     public var detectRenames: Bool
+    /// Look into subfolders. When false, only the top level is compared.
+    public var recursive = true
 
     public init(options: CompareOptions = .standard, filter: FileFilter = .all, detectRenames: Bool = false) {
         self.options = options
@@ -167,7 +171,9 @@ public struct FolderComparer {
         let isDir = (le?.isDirectory ?? re?.isDirectory) ?? false
         var item = FolderItem(id: id, name: name, isDirectory: isDir, left: le?.stat, right: re?.stat, result: .identical, children: nil)
         let relative = id.replacingOccurrences(of: "\u{0}r", with: "")
-        if isDir {
+        if isDir, !recursive {
+            if le == nil { item.result = .rightOnly } else if re == nil { item.result = .leftOnly } else { item.result = .notCompared }
+        } else if isDir {
             let children = compareFolder(left: le?.url, right: re?.url, relative: relative, count: &count, progress: progress, isCancelled: isCancelled)
             item.children = children
             if le == nil { item.result = .rightOnly }
