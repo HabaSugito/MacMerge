@@ -17,12 +17,27 @@ public struct CompareOptions: Equatable {
     public var ignoreBlankLines: Bool
     /// Treat files that differ only in CRLF/LF/CR as identical in folder comparisons.
     public var ignoreLineEndings: Bool
+    /// Show lines that moved to another place in their own color instead of as plain changes.
+    public var detectMovedBlocks: Bool
+    /// Regular expressions. A difference made only of lines matching one of them is ignored.
+    public var lineFilters: [String]
 
-    public init(whitespace: Whitespace = .compare, ignoreCase: Bool = false, ignoreBlankLines: Bool = false, ignoreLineEndings: Bool = false) {
+    public init(whitespace: Whitespace = .compare, ignoreCase: Bool = false, ignoreBlankLines: Bool = false,
+                ignoreLineEndings: Bool = false, detectMovedBlocks: Bool = false, lineFilters: [String] = []) {
         self.whitespace = whitespace
         self.ignoreCase = ignoreCase
         self.ignoreBlankLines = ignoreBlankLines
         self.ignoreLineEndings = ignoreLineEndings
+        self.detectMovedBlocks = detectMovedBlocks
+        self.lineFilters = lineFilters
+    }
+
+    /// Compiled line filters. Patterns that are not valid regular expressions are skipped.
+    func compiledLineFilters() -> [NSRegularExpression] {
+        lineFilters.compactMap { pattern in
+            let trimmed = pattern.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? nil : try? NSRegularExpression(pattern: trimmed, options: ignoreCase ? [.caseInsensitive] : [])
+        }
     }
 
     public static let standard = CompareOptions()

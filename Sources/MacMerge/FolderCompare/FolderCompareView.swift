@@ -151,6 +151,32 @@ final class FolderCompareModel: ObservableObject {
         return c
     }
 
+    // MARK: Report and patch
+
+    func makeReport() -> String {
+        HTMLReport.folderComparison(left: target.left, right: target.right, items: items)
+    }
+
+    /// One patch for every differing text file, with paths relative to the compared folders.
+    func makePatch() -> String {
+        var patch = ""
+        func walk(_ list: [FolderItem]) {
+            for item in list {
+                if let children = item.children { walk(children); continue }
+                guard item.result.isDifferent, !item.isDirectory else { continue }
+                let path = relativePath(item)
+                let old = item.left != nil ? (try? TextFile.load(url(item, left: true))) : TextFile.empty
+                let new = item.right != nil ? (try? TextFile.load(url(item, left: false))) : TextFile.empty
+                guard let old, let new, !old.isBinary, !new.isBinary else { continue }
+                patch += UnifiedDiff.make(oldName: item.left != nil ? "a/\(path)" : "/dev/null",
+                                          newName: item.right != nil ? "b/\(path)" : "/dev/null",
+                                          oldText: old.text, newText: new.text)
+            }
+        }
+        walk(items)
+        return patch
+    }
+
     // MARK: File operations
 
     /// Items that can be copied in the given direction: they exist on the source side

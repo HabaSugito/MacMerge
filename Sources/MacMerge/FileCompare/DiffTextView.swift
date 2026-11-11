@@ -1,13 +1,6 @@
 import AppKit
 import DiffCore
 
-enum Side: Int {
-    case left = 0
-    case right = 1
-
-    var other: Side { self == .left ? .right : .left }
-}
-
 /// A text view that paints diff highlights behind the text.
 ///
 /// Rows are laid out on a fixed grid (every line is exactly `rowHeight` tall). Filler rows
@@ -15,49 +8,45 @@ enum Side: Int {
 /// text itself stays the real file contents and normal editing and undo keep working.
 final class DiffTextView: NSTextView {
     weak var controller: FileCompareController?
-    var side: Side = .left
+    var paneIndex = 0
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
         guard let c = controller, !c.rows.isEmpty else { return }
         let h = c.rowHeight
-        let top = c.rowOriginY(in: self, side: side)
+        let top = c.rowOriginY(in: self, pane: paneIndex)
+        let shown = c.shownRows
         let first = max(0, Int(floor((rect.minY - top) / h)))
-        let last = min(c.rows.count - 1, Int(floor((rect.maxY - top) / h)))
+        let last = min(shown.count - 1, Int(floor((rect.maxY - top) / h)))
         guard first <= last else { return }
 
-        for r in first...last {
-            let row = c.rows[r]
-            guard let hunk = row.hunk else {
-                if row.isIgnored {
-                    let hasLine = (side == .left ? row.left : row.right) != nil
-                    (hasLine ? DiffColors.ignored : DiffColors.ignoredGhost).setFill()
-                    NSRect(x: rect.minX, y: top + CGFloat(r) * h, width: rect.width, height: h).fill()
+        for d in first...last {
+            let r = shown[d]
+            let y = top + CGFloat(d) * h
+            if let color = c.background(row: r, pane: paneIndex) {
+                color.setFill()
+                NSRect(x: rect.minX, y: y, width: rect.width, height: h).fill()
+                if c.rows[r].hunk != nil, c.showsInlineDifferences, let line = c.line(c.rows[r], pane: paneIndex) {
+                    drawInline(row: r, line: line, controller: c, rowY: y)
                 }
-                continue
             }
-            let isCurrent = hunk == c.currentHunk
-            let line = side == .left ? row.left : row.right
-            let color: NSColor
-            if line == nil {
-                color = isCurrent ? DiffColors.selectedGhost : DiffColors.ghost
-            } else {
-                color = isCurrent ? DiffColors.selected : DiffColors.changed
-            }
-            color.setFill()
-            NSRect(x: rect.minX, y: top + CGFloat(r) * h, width: rect.width, height: h).fill()
-
-            if let line, c.showsInlineDifferences {
-                drawInline(row: r, line: line, isCurrent: isCurrent, controller: c, rowY: top + CGFloat(r) * h)
+            // A dashed line where unchanged lines are folded away.
+            if (d == 0 && r > 0) || (d > 0 && shown[d - 1] != r - 1) {
+                NSColor.separatorColor.setStroke()
+                let path = NSBezierPath()
+                path.move(to: NSPoint(x: rect.minX, y: y + 0.5))
+                path.line(to: NSPoint(x: rect.maxX, y: y + 0.5))
+                path.setLineDash([4, 3], count: 2, phase: 0)
+                path.stroke()
             }
         }
     }
 
-    private func drawInline(row: Int, line: Int, isCurrent: Bool, controller c: FileCompareController, rowY: CGFloat) {
+    private func drawInline(row: Int, line: Int, controller c: FileCompareController, rowY: CGFloat) {
         guard let layoutManager, let textContainer else { return }
-        let ranges = c.inlineRanges(row: row, side: side)
-        guard !ranges.isEmpty, let lineStart = c.lineStart(side: side, line: line) else { return }
-        (isCurrent ? DiffColors.selectedWord : DiffColors.word).setFill()
+        let ranges = c.inlineRanges(row: row, pane: paneIndex)
+        guard !ranges.isEmpty, let lineStart = c.lineStart(pane: paneIndex, line: line) else { return }
+        c.inlineColor(row: row).setFill()
         let length = (string as NSString).length
         for range in ranges {
             let charRange = NSRange(location: lineStart + range.location, length: range.length)
@@ -91,21 +80,22 @@ final class LineNumberRuler: NSRulerView {
         bounds.fill()
         guard let tv = textView, let c = tv.controller, !c.rows.isEmpty else { return }
         let h = c.rowHeight
-        let top = c.rowOriginY(in: tv, side: tv.side)
+        let top = c.rowOriginY(in: tv, pane: tv.paneIndex)
         let visible = tv.visibleRect
+        let shown = c.shownRows
         let first = max(0, Int(floor((visible.minY - top) / h)))
-        let last = min(c.rows.count - 1, Int(floor((visible.maxY - top) / h)))
+        let last = min(shown.count - 1, Int(floor((visible.maxY - top) / h)))
         guard first <= last else { return }
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]
-        for r in first...last {
-            let row = c.rows[r]
-            guard let line = tv.side == .left ? row.left : row.right else { continue }
+        for d in first...last {
+            let row = c.rows[shown[d]]
+            guard let line = c.line(row, pane: tv.paneIndex) else { continue }
             let label = "\(line + 1)" as NSString
             let size = label.size(withAttributes: attrs)
-            let y = convert(NSPoint(x: 0, y: top + CGFloat(r) * h), from: tv).y
+            let y = convert(NSPoint(x: 0, y: top + CGFloat(d) * h), from: tv).y
             label.draw(at: NSPoint(x: ruleThickness - size.width - 6, y: y + (h - size.height) / 2), withAttributes: attrs)
         }
     }
@@ -115,17 +105,19 @@ final class LineNumberRuler: NSRulerView {
 final class DiffPane {
     let scrollView = NSScrollView()
     let textView: DiffTextView
+    let hiddenLines = HiddenLines()
 
-    init(side: Side, font: NSFont) {
+    init(index: Int, font: NSFont) {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
+        layoutManager.delegate = hiddenLines
         storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         container.widthTracksTextView = false
         layoutManager.addTextContainer(container)
 
         textView = DiffTextView(frame: .zero, textContainer: container)
-        textView.side = side
+        textView.paneIndex = index
         textView.minSize = .zero
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true

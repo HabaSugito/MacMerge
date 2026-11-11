@@ -8,6 +8,8 @@ enum CompareSettings {
     static let ignoreCaseKey = "compare.ignoreCase"
     static let ignoreBlankLinesKey = "compare.ignoreBlankLines"
     static let ignoreLineEndingsKey = "compare.ignoreLineEndings"
+    static let detectMovedBlocksKey = "compare.detectMovedBlocks"
+    static let lineFiltersKey = "compare.lineFilters"
     static let fileFilterKey = "folder.fileFilter"
 
     static var options: CompareOptions {
@@ -16,7 +18,9 @@ enum CompareSettings {
             whitespace: CompareOptions.Whitespace(rawValue: d.string(forKey: whitespaceKey) ?? "") ?? .compare,
             ignoreCase: d.bool(forKey: ignoreCaseKey),
             ignoreBlankLines: d.bool(forKey: ignoreBlankLinesKey),
-            ignoreLineEndings: d.bool(forKey: ignoreLineEndingsKey))
+            ignoreLineEndings: d.bool(forKey: ignoreLineEndingsKey),
+            detectMovedBlocks: d.bool(forKey: detectMovedBlocksKey),
+            lineFilters: (d.string(forKey: lineFiltersKey) ?? "").components(separatedBy: "\n"))
     }
 
     static var fileFilter: String {
@@ -30,6 +34,7 @@ struct CompareOptionControls: View {
     @AppStorage(CompareSettings.ignoreCaseKey) private var ignoreCase = false
     @AppStorage(CompareSettings.ignoreBlankLinesKey) private var ignoreBlankLines = false
     @AppStorage(CompareSettings.ignoreLineEndingsKey) private var ignoreLineEndings = false
+    @AppStorage(CompareSettings.detectMovedBlocksKey) private var detectMovedBlocks = false
 
     var body: some View {
         Picker("空白", selection: $whitespace) {
@@ -40,6 +45,7 @@ struct CompareOptionControls: View {
         Toggle("大文字と小文字を無視", isOn: $ignoreCase)
         Toggle("空行を無視", isOn: $ignoreBlankLines)
         Toggle("改行コードの違いを無視", isOn: $ignoreLineEndings)
+        Toggle("移動した行を検出", isOn: $detectMovedBlocks)
     }
 }
 
@@ -62,7 +68,16 @@ struct SettingsView: View {
                 CompareOptionControls()
             }
             Section {
-                Text("無視した差分は差分として数えず、薄い色で表示します。")
+                LineFilterEditor()
+            } header: {
+                Text("行フィルタ")
+            } footer: {
+                Text("1行に1つずつ正規表現を書きます。差分の行がすべてどれかに当てはまるとき、その差分を無視します。例: ^\\s*// Generated:")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Text("無視した差分は差分として数えず、薄い色で表示します。移動した行はオレンジで表示します。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -70,5 +85,23 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct LineFilterEditor: View {
+    @AppStorage(CompareSettings.lineFiltersKey) private var stored = ""
+    @State private var text = ""
+
+    var body: some View {
+        TextEditor(text: $text)
+            .font(.system(.body, design: .monospaced))
+            .frame(height: 80)
+            .onAppear { text = stored }
+            // Apply when typing pauses, so open comparisons do not recompare on every key.
+            .onChange(of: text) { _, new in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    if text == new, stored != new { stored = new }
+                }
+            }
     }
 }

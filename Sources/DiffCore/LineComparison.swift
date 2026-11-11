@@ -8,25 +8,64 @@ public enum DiffBlock: Equatable {
 
 /// A run of differing lines. Either side may be empty (pure insertion or deletion).
 public struct DiffHunk: Equatable {
+    public enum Kind: Equatable {
+        /// A two-way difference.
+        case change
+        /// Three-way: only the left side changed the base.
+        case leftOnly
+        /// Three-way: only the right side changed the base.
+        case rightOnly
+        /// Three-way: both sides made the same change.
+        case both
+        /// Three-way: the sides changed the base in different ways.
+        case conflict
+    }
+
     public var left: Range<Int>
     public var right: Range<Int>
+    /// Three-way only: the lines of the base (middle) file.
+    public var middle: Range<Int>?
     /// Rows this hunk occupies in the aligned side-by-side view.
     public var rows: Range<Int>
+    public var kind: Kind
+
+    public init(left: Range<Int>, right: Range<Int>, middle: Range<Int>? = nil, rows: Range<Int>, kind: Kind = .change) {
+        self.left = left
+        self.right = right
+        self.middle = middle
+        self.rows = rows
+        self.kind = kind
+    }
+
+    /// The line range on pane `pane` of `paneCount` panes (2 or 3).
+    public func range(pane: Int, of paneCount: Int) -> Range<Int> {
+        if paneCount == 3, pane == 1 { return middle ?? 0..<0 }
+        return pane == 0 ? left : right
+    }
 }
 
 /// One row of the side-by-side view. A nil line means a filler ("ghost") row on that side.
 public struct AlignedRow: Equatable {
     public var left: Int?
     public var right: Int?
+    /// Three-way only: the line of the base (middle) file.
+    public var middle: Int?
     public var hunk: Int?
     /// The lines differ, but only in ways the compare options ignore.
     public var isIgnored: Bool
 
-    public init(left: Int?, right: Int?, hunk: Int?, isIgnored: Bool = false) {
+    public init(left: Int?, right: Int?, middle: Int? = nil, hunk: Int?, isIgnored: Bool = false) {
         self.left = left
         self.right = right
+        self.middle = middle
         self.hunk = hunk
         self.isIgnored = isIgnored
+    }
+
+    /// The line on pane `pane` of `paneCount` panes (2 or 3), or nil for a filler row.
+    public func line(pane: Int, of paneCount: Int) -> Int? {
+        if paneCount == 3, pane == 1 { return middle }
+        return pane == 0 ? left : right
     }
 }
 
@@ -65,6 +104,9 @@ public struct LineComparison {
     public let blocks: [DiffBlock]
     public let hunks: [DiffHunk]
     public let rows: [AlignedRow]
+    /// Lines that were moved rather than changed, mapped to their partner on the other side.
+    public private(set) var movedLeft: [Int: Int] = [:]
+    public private(set) var movedRight: [Int: Int] = [:]
 
     public init(left: [String], right: [String], options: CompareOptions = .standard) {
         if options.changesLineKeys {
@@ -75,6 +117,13 @@ public struct LineComparison {
         var hunks: [DiffHunk] = []
         var rows: [AlignedRow] = []
         rows.reserveCapacity(max(left.count, right.count))
+        let filters = options.compiledLineFilters()
+        func isIgnorable(_ line: String) -> Bool {
+            if options.ignoreBlankLines, isBlank(line) { return true }
+            let range = NSRange(location: 0, length: (line as NSString).length)
+            return filters.contains { $0.firstMatch(in: line, range: range) != nil }
+        }
+        let checksIgnorable = options.ignoreBlankLines || !filters.isEmpty
         for block in blocks {
             switch block {
             case let .equal(l, r):
@@ -83,9 +132,9 @@ public struct LineComparison {
                     let ignored = options.changesLineKeys && left[li] != right[ri]
                     rows.append(AlignedRow(left: li, right: ri, hunk: nil, isIgnored: ignored))
                 }
-            case let .changed(l, r) where options.ignoreBlankLines
-                && left[l].allSatisfy(isBlank) && right[r].allSatisfy(isBlank):
-                // Only blank lines were added or removed.
+            case let .changed(l, r) where checksIgnorable
+                && left[l].allSatisfy(isIgnorable) && right[r].allSatisfy(isIgnorable):
+                // Only blank lines or lines matching a line filter changed.
                 for k in 0..<max(l.count, r.count) {
                     rows.append(AlignedRow(
                         left: k < l.count ? l.lowerBound + k : nil,
@@ -106,6 +155,26 @@ public struct LineComparison {
         }
         self.hunks = hunks
         self.rows = rows
+        if options.detectMovedBlocks { detectMoves(left: left, right: right, options: options) }
+    }
+
+    /// Finds lines removed in one hunk and added unchanged in another hunk.
+    /// Only lines that occur once among the removed and once among the added lines count,
+    /// so common lines such as "}" are not reported as moves.
+    private mutating func detectMoves(left: [String], right: [String], options: CompareOptions) {
+        var removed: [String: [(line: Int, hunk: Int)]] = [:]
+        var added: [String: [(line: Int, hunk: Int)]] = [:]
+        for (h, hunk) in hunks.enumerated() {
+            for i in hunk.left { removed[options.key(left[i]), default: []].append((i, h)) }
+            for j in hunk.right { added[options.key(right[j]), default: []].append((j, h)) }
+        }
+        for (key, list) in removed where list.count == 1 {
+            guard key.trimmingCharacters(in: .whitespaces).count >= 2,
+                  let partners = added[key], partners.count == 1,
+                  partners[0].hunk != list[0].hunk else { continue }
+            movedLeft[list[0].line] = partners[0].line
+            movedRight[partners[0].line] = list[0].line
+        }
     }
 }
 

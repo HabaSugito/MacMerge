@@ -265,3 +265,112 @@ final class SimilarLineTests: XCTestCase {
         XCTAssertEqual(c.rows.map(\.right), [0, nil])
     }
 }
+
+final class LineFilterAndMoveTests: XCTestCase {
+    func testLineFilterIgnoresMatchingChanges() {
+        let opts = CompareOptions(lineFilters: ["^// Generated: "])
+        let c = LineComparison(left: ["// Generated: 2024-01-01", "a"], right: ["// Generated: 2026-11-11", "a"], options: opts)
+        XCTAssertTrue(c.hunks.isEmpty)
+        XCTAssertTrue(c.rows[0].isIgnored)
+        XCTAssertEqual(LineComparison(left: ["x", "a"], right: ["y", "a"], options: opts).hunks.count, 1)
+    }
+
+    func testMovedLine() {
+        let left = ["func a() {}", "x", "y", "z", "func b() {}"]
+        let right = ["x", "y", "z", "func b() {}", "func a() {}"]
+        let c = LineComparison(left: left, right: right, options: CompareOptions(detectMovedBlocks: true))
+        XCTAssertEqual(c.movedLeft, [0: 4])
+        XCTAssertEqual(c.movedRight, [4: 0])
+    }
+}
+
+final class UnifiedDiffTests: XCTestCase {
+    func testFormat() {
+        let patch = UnifiedDiff.make(oldName: "a/f", newName: "b/f", oldText: "1\n2\n3\n", newText: "1\nX\n3\n")
+        XCTAssertEqual(patch, "--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n 1\n-2\n+X\n 3\n")
+        XCTAssertEqual(UnifiedDiff.make(oldName: "a", newName: "b", oldText: "same\n", newText: "same\n"), "")
+    }
+
+    func testNoNewlineAtEnd() {
+        let patch = UnifiedDiff.make(oldName: "a", newName: "b", oldText: "x\n", newText: "x")
+        XCTAssertEqual(patch, "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+x\n\\ No newline at end of file\n")
+    }
+
+    /// Random edits: the patch applied with /usr/bin/patch must give the new text.
+    func testPatchAppliesWithSystemPatch() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        for round in 0..<40 {
+            var lines = (0..<Int.random(in: 0...60)).map { "line \($0 % 7) \($0 % 3)" }
+            let old = lines.joined(separator: "\n") + (round % 3 == 0 ? "" : "\n")
+            for _ in 0..<Int.random(in: 1...6) {
+                switch Int.random(in: 0...2) {
+                case 0 where !lines.isEmpty: lines.remove(at: Int.random(in: 0..<lines.count))
+                case 1: lines.insert("new \(Int.random(in: 0...9))", at: Int.random(in: 0...lines.count))
+                default: if !lines.isEmpty { lines[Int.random(in: 0..<lines.count)] = "edited" }
+                }
+            }
+            let new = lines.joined(separator: "\n") + (round % 4 == 0 ? "" : "\n")
+            let file = dir.appendingPathComponent("f.txt"), patchFile = dir.appendingPathComponent("p.diff")
+            try old.write(to: file, atomically: true, encoding: .utf8)
+            let patch = UnifiedDiff.make(oldName: "f.txt", newName: "f.txt", oldText: old, newText: new)
+            if old == new { XCTAssertEqual(patch, ""); continue }
+            try patch.write(to: patchFile, atomically: true, encoding: .utf8)
+            let p = Process()
+            p.executableURL = URL(filePath: "/usr/bin/patch")
+            p.arguments = ["-s", "-i", patchFile.path, file.path]
+            p.standardOutput = FileHandle.nullDevice
+            p.standardError = FileHandle.nullDevice
+            try p.run(); p.waitUntilExit()
+            XCTAssertEqual(p.terminationStatus, 0, "patch failed:\n\(patch)")
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), new, "old=\(old.debugDescription)\npatch=\(patch)")
+        }
+    }
+
+    func testHTMLReportEscapes() {
+        let c = LineComparison(left: ["<a>"], right: ["<b>"])
+        let html = HTMLReport.fileComparison(leftTitle: "L", rightTitle: "R", left: ["<a>"], right: ["<b>"], comparison: c)
+        XCTAssertTrue(html.contains("&lt;"))
+        XCTAssertFalse(html.contains("<a>"))
+    }
+}
+
+final class ThreeWayTests: XCTestCase {
+    func testKinds() {
+        let base = ["a", "b", "c", "d", "e"]
+        let left = ["a", "B", "c", "d", "E1"]
+        let right = ["a", "b", "c", "D", "E2"]
+        let c = ThreeWayComparison(left: left, middle: base, right: right)
+        // "d"→"D" on the right touches "e"→"E1"/"E2", so diff3 makes them one conflict.
+        XCTAssertEqual(c.hunks.map(\.kind), [.leftOnly, .conflict])
+        XCTAssertEqual(c.hunks[0].middle, 1..<2)
+        XCTAssertEqual(c.hunks[1].middle, 3..<5)
+        XCTAssertEqual(c.rows.count, 5)
+        XCTAssertEqual(c.rows[4], AlignedRow(left: 4, right: 4, middle: 4, hunk: 1))
+        let separate = ThreeWayComparison(left: ["a", "B", "c", "d", "e"], middle: base, right: ["a", "b", "c", "d", "E"])
+        XCTAssertEqual(separate.hunks.map(\.kind), [.leftOnly, .rightOnly])
+    }
+
+    func testInsertionsAndSameChange() {
+        let c = ThreeWayComparison(left: ["x", "a", "b"], middle: ["a", "b"], right: ["x", "a", "b", "y"])
+        XCTAssertEqual(c.hunks.map(\.kind), [.both, .rightOnly])
+        XCTAssertEqual(c.rows.first, AlignedRow(left: 0, right: 0, middle: nil, hunk: 0))
+    }
+
+    func testIdentical() {
+        XCTAssertTrue(ThreeWayComparison(left: ["a"], middle: ["a"], right: ["a"]).hunks.isEmpty)
+    }
+
+    func testConflictFile() {
+        let text = "start\n<<<<<<< HEAD\nmine\n||||||| base\norig\n=======\nyours\n>>>>>>> feature\nend\n"
+        let f = ConflictFile(text: text)!
+        XCTAssertEqual(f.ours, "start\nmine\nend\n")
+        XCTAssertEqual(f.base, "start\norig\nend\n")
+        XCTAssertEqual(f.theirs, "start\nyours\nend\n")
+        XCTAssertEqual(f.oursLabel, "HEAD")
+        XCTAssertEqual(f.theirsLabel, "feature")
+        XCTAssertNil(ConflictFile(text: "no markers\n"))
+    }
+}

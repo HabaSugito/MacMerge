@@ -11,6 +11,13 @@ enum DiffColors {
     static let selectedWord = dynamic(light: (255, 160, 160), dark: (190, 80, 85))
     static let ignored = dynamic(light: (251, 242, 191), dark: (58, 52, 30))
     static let ignoredGhost = dynamic(light: (233, 233, 233), dark: (48, 48, 50))
+    static let moved = dynamic(light: (228, 155, 82), dark: (120, 75, 35))
+    static let selectedMoved = dynamic(light: (248, 112, 78), dark: (150, 60, 40))
+    /// Three-way changes that can be merged automatically (one side only, or the same on both).
+    static let mergeable = dynamic(light: (190, 225, 250), dark: (35, 70, 100))
+    static let selectedMergeable = dynamic(light: (120, 185, 240), dark: (50, 100, 150))
+    static let mergeableWord = dynamic(light: (140, 195, 245), dark: (55, 105, 150))
+    static let selectedMergeableWord = dynamic(light: (190, 225, 255), dark: (80, 135, 190))
     static let gutter = NSColor(name: nil) { $0.isDark ? NSColor(white: 0.13, alpha: 1) : NSColor(white: 0.95, alpha: 1) }
 
     private static func dynamic(light: (Int, Int, Int), dark: (Int, Int, Int)) -> NSColor {

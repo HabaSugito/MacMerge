@@ -7,6 +7,8 @@ struct OpenView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("lastLeftPath") private var leftPath = ""
     @AppStorage("lastRightPath") private var rightPath = ""
+    @AppStorage("lastMiddlePath") private var middlePath = ""
+    @AppStorage("showMiddlePath") private var showsMiddle = false
     @State private var error: String?
     @Environment(\.openWindow) private var openWindow
 
@@ -15,7 +17,12 @@ struct OpenView: View {
             Text("比較するファイルまたはフォルダを選んでください")
                 .font(.headline)
             PathField(label: "左", path: $leftPath)
+            if showsMiddle {
+                PathField(label: "中", path: $middlePath, placeholder: "ベース（共通の元ファイル）のパス")
+            }
             PathField(label: "右", path: $rightPath)
+            Toggle("3者比較（中央にベースを置く）", isOn: $showsMiddle)
+                .font(.callout)
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
@@ -38,14 +45,12 @@ struct OpenView: View {
         .onAppear(perform: openLaunchArguments)
     }
 
-    /// `MacMerge <left> <right>` opens that comparison right away (for git difftool and scripts).
+    /// Paths given on the command line open that comparison right away (for git difftool and mergetool).
     private func openLaunchArguments() {
-        let args = LaunchArguments.paths
-        guard args.count == 2, !LaunchArguments.consumed else { return }
+        guard !LaunchArguments.consumed, let target = LaunchArguments.target else { return }
         LaunchArguments.consumed = true
-        leftPath = args[0]
-        rightPath = args[1]
-        compare()
+        openWindow(value: target)
+        if closesAfterCompare { dismiss() }
     }
 
 
@@ -57,8 +62,16 @@ struct OpenView: View {
         guard lExists else { error = "左のパスが見つかりません"; return }
         guard rExists else { error = "右のパスが見つかりません"; return }
         guard lDir.boolValue == rDir.boolValue else { error = "ファイルとフォルダは比較できません"; return }
+        var middle: URL?
+        if showsMiddle, !middlePath.isEmpty {
+            var mDir: ObjCBool = false
+            let m = URL(filePath: expand(middlePath))
+            guard FileManager.default.fileExists(atPath: m.path, isDirectory: &mDir) else { error = "中央のパスが見つかりません"; return }
+            guard !mDir.boolValue, !lDir.boolValue else { error = "3者比較はファイル同士だけです"; return }
+            middle = m
+        }
         error = nil
-        openWindow(value: CompareTarget(left: l, right: r, isFolder: lDir.boolValue))
+        openWindow(value: CompareTarget(left: l, right: r, middle: middle, kind: lDir.boolValue ? .folders : .files))
         if closesAfterCompare { dismiss() }
     }
 
@@ -70,12 +83,13 @@ struct OpenView: View {
 private struct PathField: View {
     let label: String
     @Binding var path: String
+    var placeholder = "パスを入力するか、ここにドラッグ"
     @State private var isTargeted = false
 
     var body: some View {
         HStack {
             Text(label).frame(width: 20, alignment: .leading)
-            TextField("パスを入力するか、ここにドラッグ", text: $path)
+            TextField(placeholder, text: $path)
                 .textFieldStyle(.roundedBorder)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: isTargeted ? 2 : 0))
                 .dropDestination(for: URL.self) { urls, _ in

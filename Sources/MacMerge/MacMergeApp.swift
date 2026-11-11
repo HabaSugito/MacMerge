@@ -14,12 +14,19 @@ enum Launcher {
 
 enum LaunchArguments {
     static var consumed = false
+    private static let keys = ["MacMergeLeft", "MacMergeMiddle", "MacMergeRight", "MacMergeOutput", "MacMergeConflict"]
 
-    /// Paths given on the command line.
-    static var paths: [String] {
+    /// The comparison asked for on the command line:
+    /// `MacMerge FILE` (conflict file), `MacMerge LEFT RIGHT`, `MacMerge LEFT BASE RIGHT [OUTPUT]`.
+    static var target: CompareTarget? {
         let options = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-        guard let left = options["MacMergeLeft"] as? String, let right = options["MacMergeRight"] as? String else { return [] }
-        return [left, right]
+        func url(_ key: String) -> URL? { (options[key] as? String).map { URL(filePath: $0) } }
+        if let conflict = url("MacMergeConflict") { return .conflict(conflict) }
+        guard let left = url("MacMergeLeft"), let right = url("MacMergeRight") else { return nil }
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: left.path, isDirectory: &isDir)
+        return CompareTarget(left: left, right: right, middle: url("MacMergeMiddle"), output: url("MacMergeOutput"),
+                             kind: isDir.boolValue ? .folders : .files)
     }
 
     static func relaunchWithOptionsIfNeeded() {
@@ -37,10 +44,17 @@ enum LaunchArguments {
                 i += 1
             }
         }
-        guard positional.count == 2, let exe = Bundle.main.executablePath else { return }
+        guard (1...4).contains(positional.count), let exe = Bundle.main.executablePath else { return }
         let cwd = URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory)
-        let absolute = positional.map { URL(filePath: ($0 as NSString).expandingTildeInPath, relativeTo: cwd).path(percentEncoded: false) }
-        let newArgs = [exe] + options + ["-MacMergeLeft", absolute[0], "-MacMergeRight", absolute[1]]
+        let paths = positional.map { URL(filePath: ($0 as NSString).expandingTildeInPath, relativeTo: cwd).path(percentEncoded: false) }
+        let names: [String]
+        switch paths.count {
+        case 1: names = ["MacMergeConflict"]
+        case 2: names = ["MacMergeLeft", "MacMergeRight"]
+        default: names = ["MacMergeLeft", "MacMergeMiddle", "MacMergeRight", "MacMergeOutput"]
+        }
+        var newArgs = [exe] + options
+        for (name, path) in zip(names, paths) { newArgs += ["-" + name, path] }
         var cArgs = newArgs.map { strdup($0) } + [nil]
         execv(exe, &cArgs)
         // execv only returns on failure; carry on without the paths.
