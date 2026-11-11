@@ -28,7 +28,14 @@ final class DiffTextView: NSTextView {
 
         for r in first...last {
             let row = c.rows[r]
-            guard let hunk = row.hunk else { continue }
+            guard let hunk = row.hunk else {
+                if row.isIgnored {
+                    let hasLine = (side == .left ? row.left : row.right) != nil
+                    (hasLine ? DiffColors.ignored : DiffColors.ignoredGhost).setFill()
+                    NSRect(x: rect.minX, y: top + CGFloat(r) * h, width: rect.width, height: h).fill()
+                }
+                continue
+            }
             let isCurrent = hunk == c.currentHunk
             let line = side == .left ? row.left : row.right
             let color: NSColor

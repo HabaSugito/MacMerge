@@ -39,6 +39,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
     private var isMovingCaret = false
     private var activeSide: Side = .left
     private var closeGuard: WindowCloseGuard?
+    private(set) var options = CompareSettings.options
 
     weak var window: NSWindow? {
         didSet {
@@ -60,6 +61,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             pane.textView.delegate = self
             NotificationCenter.default.addObserver(self, selector: #selector(clipViewScrolled(_:)), name: NSView.boundsDidChangeNotification, object: pane.scrollView.contentView)
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged), name: UserDefaults.didChangeNotification, object: nil)
         load()
         DebugActions.runIfRequested(on: self)
     }
@@ -103,7 +105,7 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         let texts = [left.textView.string, right.textView.string]
         lines = texts.map(splitLines)
         lineStarts = texts.map(Self.lineStarts)
-        let comparison = LineComparison(left: lines[0], right: lines[1])
+        let comparison = LineComparison(left: lines[0], right: lines[1], options: options)
         rows = comparison.rows
         inlineCache = [:]
 
@@ -215,11 +217,19 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         if let l = r.left, let rr = r.right, l < lines[0].count, rr < lines[1].count {
             let a = lines[0][l], b = lines[1][rr]
             if a.utf16.count < 5000, b.utf16.count < 5000 {
-                result = inlineDifferences(a, b)
+                result = inlineDifferences(a, b, options: options)
             }
         }
         inlineCache[row] = result
         return side == .left ? result.left : result.right
+    }
+
+    @objc private func defaultsChanged() {
+        let new = CompareSettings.options
+        guard new != options else { return }
+        options = new
+        currentHunk = nil
+        recomputeNow()
     }
 
     // MARK: Scrolling

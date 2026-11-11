@@ -7,12 +7,14 @@ public enum InlineGranularity {
 
 /// Finds which parts of two lines differ. Ranges are UTF-16 offsets within each line,
 /// so they can be used directly with NSString and text views.
-public func inlineDifferences(_ a: String, _ b: String, granularity: InlineGranularity = .word) -> (left: [NSRange], right: [NSRange]) {
+public func inlineDifferences(_ a: String, _ b: String, granularity: InlineGranularity = .word, options: CompareOptions = .standard) -> (left: [NSRange], right: [NSRange]) {
     if a == b { return ([], []) }
-    let ta = tokenize(a, granularity), tb = tokenize(b, granularity)
+    // Tokens the options ignore completely (e.g. all whitespace) are left out of the comparison.
+    let ta = tokenize(a, granularity).filter { options.tokenKey($0.text) != nil }
+    let tb = tokenize(b, granularity).filter { options.tokenKey($0.text) != nil }
     var interner = Interner<Substring>()
-    let ia = ta.map { interner.id($0.text) }
-    let ib = tb.map { interner.id($0.text) }
+    let ia = ta.map { interner.id(options.tokenKey($0.text)!) }
+    let ib = tb.map { interner.id(options.tokenKey($0.text)!) }
     let diff = MyersDiff(ia, ib)
     return (ranges(ta, diff.deleted), ranges(tb, diff.inserted))
 }

@@ -9,6 +9,8 @@ enum DiffColors {
     static let selectedGhost = dynamic(light: (240, 192, 192), dark: (85, 55, 58))
     static let word = dynamic(light: (241, 226, 173), dark: (165, 135, 40))
     static let selectedWord = dynamic(light: (255, 160, 160), dark: (190, 80, 85))
+    static let ignored = dynamic(light: (251, 242, 191), dark: (58, 52, 30))
+    static let ignoredGhost = dynamic(light: (233, 233, 233), dark: (48, 48, 50))
     static let gutter = NSColor(name: nil) { $0.isDark ? NSColor(white: 0.13, alpha: 1) : NSColor(white: 0.95, alpha: 1) }
 
     private static func dynamic(light: (Int, Int, Int), dark: (Int, Int, Int)) -> NSColor {

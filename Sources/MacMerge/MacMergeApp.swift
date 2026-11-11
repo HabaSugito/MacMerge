@@ -75,6 +75,10 @@ struct MacMergeApp: App {
             AppCommands()
             TextEditingCommands()
         }
+
+        Settings {
+            SettingsView()
+        }
     }
 }
 

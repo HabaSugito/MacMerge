@@ -42,8 +42,13 @@ public struct FolderComparer {
     public var ignoredNames: Set<String> = [".DS_Store"]
     /// Text files larger than this are only checked for identical bytes, not diffed.
     public var diffCountLimit = 4 * 1024 * 1024
+    public var options: CompareOptions
+    public var filter: FileFilter
 
-    public init() {}
+    public init(options: CompareOptions = .standard, filter: FileFilter = .all) {
+        self.options = options
+        self.filter = filter
+    }
 
     /// Compares two folders recursively. `progress` is called with the number of files compared so far.
     public func compare(left: URL, right: URL, progress: ((Int) -> Void)? = nil, isCancelled: () -> Bool = { false }) -> [FolderItem] {
@@ -66,6 +71,8 @@ public struct FolderComparer {
             let values = try? item.resourceValues(forKeys: Set(keys))
             // Do not follow symbolic links to folders, to avoid loops.
             let isDir = (values?.isDirectory ?? false) && !(values?.isSymbolicLink ?? false)
+            let name = item.lastPathComponent
+            guard isDir ? filter.includesFolder(named: name) : filter.includesFile(named: name) else { continue }
             result[item.lastPathComponent] = Entry(
                 url: item,
                 isDirectory: isDir,
@@ -129,9 +136,17 @@ public struct FolderComparer {
             guard ld.count + rd.count <= diffCountLimit else { return .different(diffCount: nil) }
             let lt = TextFile.decode(ld), rt = TextFile.decode(rd)
             if lt.isBinary || rt.isBinary { return .binaryDifferent }
-            let hunks = LineComparison(left: splitLines(lt.text), right: splitLines(rt.text)).hunks.count
-            // Files whose bytes differ only in encoding or line endings still count as different.
-            return .different(diffCount: hunks)
+            let hunks = LineComparison(left: splitLines(lt.text), right: splitLines(rt.text), options: options).hunks.count
+            guard hunks == 0 else { return .different(diffCount: hunks) }
+            // The text matches. The bytes can still differ in line endings or encoding,
+            // or only in ways the options ignore.
+            if lt.lineEnding != rt.lineEnding, !options.ignoreLineEndings, lt.text.contains("\n") || rt.text.contains("\n") {
+                return .different(diffCount: 0)
+            }
+            if lt.encoding != rt.encoding || lt.hasBOM != rt.hasBOM {
+                return .different(diffCount: 0)
+            }
+            return .identical
         } catch {
             return .error(error.localizedDescription)
         }

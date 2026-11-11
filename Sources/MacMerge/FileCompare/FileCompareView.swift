@@ -67,6 +67,9 @@ struct FileCompareView: View {
                 .help("左の差分を右へコピー (⌥→)")
                 .disabled(controller.currentHunk == nil)
         }
+        ToolbarItem {
+            CompareOptionsMenu()
+        }
         ToolbarItemGroup {
             Button { controller.saveAll() } label: { Label("保存", systemImage: "square.and.arrow.down") }
                 .help("保存 (⌘S)")

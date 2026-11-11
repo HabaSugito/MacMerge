@@ -3,6 +3,7 @@ import SwiftUI
 /// Menu bar commands. Shortcuts follow WinMerge, with Alt mapped to Option.
 struct AppCommands: Commands {
     @FocusedValue(\.fileCompare) private var compare
+    @FocusedValue(\.folderCompare) private var folder
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
@@ -20,9 +21,11 @@ struct AppCommands: Commands {
             Button("右を保存") { compare?.save(.right) }
                 .disabled(compare == nil)
             Divider()
-            Button("再読み込み") { compare?.reload() }
-                .keyboardShortcut("r")
-                .disabled(compare == nil)
+            Button("再読み込み") {
+                if let compare { compare.reload() } else { folder?.compare() }
+            }
+            .keyboardShortcut("r")
+            .disabled(compare == nil && folder == nil)
         }
 
         CommandGroup(after: .toolbar) {
@@ -44,10 +47,14 @@ struct AppCommands: Commands {
             Button("現在の差分") { compare?.currentDifference() }
                 .keyboardShortcut(.return, modifiers: .option)
             Divider()
-            Button("右へコピー") { compare?.copyCurrent(from: .left) }
-                .keyboardShortcut(.rightArrow, modifiers: .option)
-            Button("左へコピー") { compare?.copyCurrent(from: .right) }
-                .keyboardShortcut(.leftArrow, modifiers: .option)
+            Button("右へコピー") {
+                if let compare { compare.copyCurrent(from: .left) } else { folder?.copySelected(toRight: true) }
+            }
+            .keyboardShortcut(.rightArrow, modifiers: .option)
+            Button("左へコピー") {
+                if let compare { compare.copyCurrent(from: .right) } else { folder?.copySelected(toRight: false) }
+            }
+            .keyboardShortcut(.leftArrow, modifiers: .option)
             Button("右へコピーして次へ") { compare?.copyCurrent(from: .left, advance: true) }
                 .keyboardShortcut(.rightArrow, modifiers: [.control, .option])
             Button("左へコピーして次へ") { compare?.copyCurrent(from: .right, advance: true) }
@@ -55,6 +62,10 @@ struct AppCommands: Commands {
             Divider()
             Button("すべて右へコピー") { compare?.copyAll(from: .left) }
             Button("すべて左へコピー") { compare?.copyAll(from: .right) }
+            Divider()
+            Button("ゴミ箱に入れる…") { folder?.deleteSelected() }
+                .keyboardShortcut(.delete, modifiers: .command)
+                .disabled(folder == nil)
         }
     }
 }
