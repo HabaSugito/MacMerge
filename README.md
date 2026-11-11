@@ -6,6 +6,8 @@ A free, open-source file and folder comparison tool for macOS, inspired by WinMe
 
 > 🚧 開発中です / Work in progress
 
+**ダウンロード / Download:** [最新版 / Latest release](https://github.com/HabaSugito/MacMerge/releases/latest) · **Web:** [macmerge.pages.dev](https://macmerge.pages.dev)
+
 画面は英語と日本語に対応しています。macOS の言語設定に合わせて切り替わり、設定画面（⌘,）でも選べます。
 
 The app is available in English and Japanese. It follows the macOS language, and you can choose the language in Settings (⌘,).
@@ -114,9 +116,11 @@ git mergetool -t macmerge
 macOS 14 以降、Xcode 16 以降が必要です。
 
 ```bash
-./scripts/build-app.sh   # build/MacMerge.app を作る
+./scripts/build-app.sh   # build/MacMerge.app を作る（UNIVERSAL=1 で Intel 対応版も）
 swift test               # 比較エンジンと画面まわりのテスト
 ```
+
+リリース（署名・公証・DMG）と紹介ページの公開は [docs/RELEASING.md](docs/RELEASING.md) を見てください。
 
 ### 翻訳 / Translations
 

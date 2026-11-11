@@ -17,11 +17,11 @@ final class FolderCompareModel: ObservableObject {
     @Published var showRightOnly = true { didSet { refilter() } }
     @Published var filterText = CompareSettings.fileFilter
     /// Tree view (folders that open and close) or a flat list of every file.
-    @Published var treeMode = UserDefaults.standard.object(forKey: "folder.treeMode") as? Bool ?? true {
+    @Published var treeMode = UserDefaults.standard.flag("folder.treeMode", default: true) {
         didSet { UserDefaults.standard.set(treeMode, forKey: "folder.treeMode"); refilter() }
     }
     /// Compare again automatically when files in either folder change.
-    @Published var watchesChanges = UserDefaults.standard.object(forKey: "folder.watchChanges") as? Bool ?? true {
+    @Published var watchesChanges = UserDefaults.standard.flag("folder.watchChanges", default: true) {
         didSet { UserDefaults.standard.set(watchesChanges, forKey: "folder.watchChanges"); updateWatcher() }
     }
     private var watcher: FolderWatcher?
@@ -415,6 +415,7 @@ struct FolderCompareView: View {
                 .customizationID("extension")
         }
         .onChange(of: columns) { _, new in FolderColumns.save(new) }
+        .onAppear { if !model.treeMode { columns[visibility: "folder"] = .visible } }
         .onChange(of: model.treeMode) { _, tree in
             // The folder column is what tells files apart in the flat list.
             columns[visibility: "folder"] = tree ? .hidden : .visible

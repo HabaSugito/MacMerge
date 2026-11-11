@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MacMerge — Compare and merge files and folders on your Mac</title>
+  <meta name="description" content="A free, open-source file and folder comparison tool for macOS, inspired by WinMerge.">
+  <meta property="og:title" content="MacMerge">
+  <meta property="og:description" content="A free, open-source file and folder comparison tool for macOS, inspired by WinMerge.">
+  <meta property="og:image" content="https://macmerge.pages.dev/images/file-en.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="alternate" hreflang="ja" href="https://macmerge.pages.dev/ja/">
+  <link rel="alternate" hreflang="en" href="https://macmerge.pages.dev/">
+  <link rel="icon" href="favicon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <a class="brand" href="./"><img src="images/icon.png" alt="">MacMerge</a>
+      <nav>
+        <a class="section-link" href="#features">Features</a>
+        <a class="section-link" href="#install">Install</a>
+        <a class="section-link" href="#git">Use with Git</a>
+        <a href="https://github.com/HabaSugito/MacMerge">GitHub</a>
+        <a href="ja/" hreflang="ja">日本語</a>
+      </nav>
+    </header>
+
+    <div class="hero">
+      <img class="icon" src="images/icon.png" alt="MacMerge icon">
+      <h1>MacMerge</h1>
+      <p class="lead">Compare files and folders side by side, see exactly what changed, and merge with a keystroke. Free and open source, inspired by WinMerge.</p>
+      <div class="buttons">
+        <a class="button primary" href="https://github.com/HabaSugito/MacMerge/releases/latest/download/MacMerge.dmg">Download for Mac</a>
+        <a class="button" href="https://github.com/HabaSugito/MacMerge">View on GitHub</a>
+      </div>
+      <p class="meta">macOS 14 or later · Apple silicon and Intel · MIT License</p>
+    </div>
+
+    <figure class="shot">
+      <img src="images/file-en.png" alt="Side-by-side file comparison with differences within lines" width="1200" height="480">
+      <figcaption>Side-by-side file comparison with differences within lines</figcaption>
+    </figure>
+  </div>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>Built for the way you compare</h2>
+      <p class="sub">Everything you know from WinMerge, as a native Mac app.</p>
+      <div class="grid">
+        <div class="card"><h3>Side-by-side compare</h3><p>Aligned panes, colored differences, differences within lines, and a map of where every change is.</p></div>
+        <div class="card"><h3>Merge with a keystroke</h3><p>Copy a difference left or right with ⌥← / ⌥→, edit in place, undo, and save.</p></div>
+        <div class="card"><h3>3-way merge</h3><p>Compare your version, the base and theirs. Auto merge takes every one-sided change and leaves only real conflicts.</p></div>
+        <div class="card"><h3>Git conflict files</h3><p>Open a file with &lt;&lt;&lt;&lt;&lt;&lt;&lt; markers and resolve it in three panes. Works as git difftool and git mergetool.</p></div>
+        <div class="card"><h3>Folder compare</h3><p>Compare whole folders, filter by result or file mask, copy or trash files, and detect renamed or moved files.</p></div>
+        <div class="card"><h3>Ignore what doesn&#x27;t matter</h3><p>Ignore whitespace, case, blank lines, line endings, or lines matching a regular expression.</p></div>
+        <div class="card"><h3>Reads Japanese and more</h3><p>Detects UTF-8, UTF-16, Shift_JIS and EUC-JP, and LF/CRLF/CR, and saves files back the way they were.</p></div>
+        <div class="card"><h3>Focus on the changes</h3><p>Show only a few lines around each difference, wrap long lines, and color the syntax of common languages.</p></div>
+        <div class="card"><h3>Reports and patches</h3><p>Export an HTML report or a unified patch, print a comparison, and save comparisons as project files.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap split">
+      <div><h3>Three-way merge</h3><p>Blue changes were made on one side only and can be merged automatically. Yellow changes are conflicts for you to decide.</p><p>Open the conflict files Git leaves behind, or let git mergetool start MacMerge for you.</p></div>
+      <figure class="shot" style="margin:0">
+        <img src="images/merge-en.png" alt="Three-way merge: one-sided changes in blue, a conflict in yellow" width="1200" height="420">
+        <figcaption>Three-way merge: one-sided changes in blue, a conflict in yellow</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap split">
+      <div><h3>Folder comparison</h3><p>See which files are identical, different, or on one side only, as a tree or a flat list.</p><p>Copy files across, move them to the Trash, or zip them up. Renamed and moved files are paired automatically.</p></div>
+      <figure class="shot" style="margin:0">
+        <img src="images/folder-en.png" alt="Folder comparison with renamed files detected" width="1200" height="345">
+        <figcaption>Folder comparison with renamed files detected</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="alt" id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p class="sub">macOS 14 or later · Apple silicon and Intel · MIT License</p>
+      <ol class="steps">
+        <li>Download <a href="https://github.com/HabaSugito/MacMerge/releases/latest/download/MacMerge.dmg">MacMerge.dmg</a>.</li>
+        <li>Open it and drag MacMerge to the Applications folder.</li>
+        <li>Start MacMerge from Applications or Spotlight.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="git">
+    <div class="wrap" style="max-width:760px">
+      <h2>Use with Git</h2>
+      <p class="sub">Set MacMerge as your diff and merge tool:</p>
+      <pre><code>git config --global difftool.macmerge.cmd \
+  &#x27;/Applications/MacMerge.app/Contents/MacOS/MacMerge &quot;$LOCAL&quot; &quot;$REMOTE&quot;&#x27;
+git config --global mergetool.macmerge.cmd \
+  &#x27;/Applications/MacMerge.app/Contents/MacOS/MacMerge &quot;$LOCAL&quot; &quot;$BASE&quot; &quot;$REMOTE&quot; &quot;$MERGED&quot;&#x27;
+git config --global mergetool.macmerge.trustExitCode false
+
+git difftool -t macmerge
+git mergetool -t macmerge</code></pre>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>MacMerge is an independent open-source project inspired by WinMerge. It is not affiliated with the WinMerge project.</p>
+      <p>Made with care for the Mac. MIT License. · <a href="https://github.com/HabaSugito/MacMerge">GitHub</a> · <a href="ja/">日本語</a></p>
+    </div>
+  </footer>
+</body>
+</html>

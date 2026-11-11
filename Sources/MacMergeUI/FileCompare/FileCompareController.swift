@@ -95,6 +95,9 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
             guard let window, window !== oldValue else { return }
             closeGuard = WindowCloseGuard(window: window) { [weak self] in self?.confirmClose() ?? true }
             updateDocumentEdited()
+            // While the window is first laid out, AppKit can leave a pane scrolled sideways
+            // under the line-number ruler; start every pane at its left edge.
+            DispatchQueue.main.async { [weak self] in self?.resetHorizontalScroll() }
         }
     }
 
@@ -546,6 +549,16 @@ final class FileCompareController: NSObject, ObservableObject, NSTextViewDelegat
         }
         isSyncingScroll = false
         updateVisibleRows()
+    }
+
+    func resetHorizontalScroll() {
+        isSyncingScroll = true
+        for pane in panes {
+            let clip = pane.scrollView.contentView
+            clip.setBoundsOrigin(NSPoint(x: -clip.contentInsets.left, y: clip.bounds.minY))
+            pane.scrollView.reflectScrolledClipView(clip)
+        }
+        isSyncingScroll = false
     }
 
     private func updateVisibleRows() {

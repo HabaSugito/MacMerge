@@ -11,7 +11,7 @@ enum EditorSettings {
     /// The editor font. An empty name means the system monospaced font.
     static var font: NSFont {
         let d = UserDefaults.standard
-        let size = d.object(forKey: fontSizeKey) as? Double ?? 13
+        let size = d.object(forKey: fontSizeKey) == nil ? 13 : d.double(forKey: fontSizeKey)
         if let name = d.string(forKey: fontNameKey), !name.isEmpty, let font = NSFont(name: name, size: size) {
             return font
         }
@@ -19,11 +19,12 @@ enum EditorSettings {
     }
 
     static var tabWidth: Int {
-        max(1, min(16, UserDefaults.standard.object(forKey: tabWidthKey) as? Int ?? 4))
+        let d = UserDefaults.standard
+        return max(1, min(16, d.object(forKey: tabWidthKey) == nil ? 4 : d.integer(forKey: tabWidthKey)))
     }
 
     static var syntaxHighlighting: Bool {
-        UserDefaults.standard.object(forKey: syntaxKey) as? Bool ?? true
+        UserDefaults.standard.flag(syntaxKey, default: true)
     }
 
     /// Monospaced font families installed on this Mac, for the font menu.
@@ -112,5 +113,13 @@ struct EditorSettingsSection: View {
                 colorRefresh += 1
             }
         }
+    }
+}
+
+extension UserDefaults {
+    /// A yes/no setting with a default. Unlike `object(forKey:) as? Bool`, this also reads
+    /// values given on the command line, such as `-folder.treeMode NO`.
+    func flag(_ key: String, default value: Bool) -> Bool {
+        object(forKey: key) == nil ? value : bool(forKey: key)
     }
 }
